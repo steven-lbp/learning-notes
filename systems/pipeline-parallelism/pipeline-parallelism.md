@@ -19,13 +19,13 @@ A technique used to distribute model training across **multiple GPUs** (or machi
 
 - **Naive**
 
-![image-20250201124929335](image/image-20250201124929335.png)
+![image-20250201124929335](images/image-20250201124929335.png)
 
 - **F-then-B**
 
 Multiple micro batch **intermediate variables and gradients are cached**, and the actual **utilization of video memory is low**
 
-![image-20250201125046119](image/image-20250201125046119.png)
+![image-20250201125046119](images/image-20250201125046119.png)
 
 **Improvement:  gradient checkpoint**
 
@@ -35,13 +35,13 @@ In the backward pass, caculating the white points using the cached purple point 
 
 In other words, using computation time to exchange for more memory space.
 
-![image-20250201133418223](image/image-20250201133418223.png)
+![image-20250201133418223](images/image-20250201133418223.png)
 
 - **1F1B**
 
 In the backward pass, separate each micro-batch. After the micro backward pass, release the memory.
 
-![image-20250201140811546](image/image-20250201140811546.png)
+![image-20250201140811546](images/image-20250201140811546.png)
 
 - **Deepseek MoE Parrelism**
 

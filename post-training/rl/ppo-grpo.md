@@ -1,4 +1,4 @@
-## PPO vs GRPO
+# PPO 与 GRPO
 ### 本质区别：**baseline 的来源**
 
 - PPO：

@@ -1,4 +1,4 @@
-## QLoRA
+# QLoRA
 QLoRA (Quantized Low-Rank Adapter for Efficient Finetuning) is an advanced fine-tuning technique that enables efficient low-cost adaptation of large language models (LLMs) on consumer GPUs while maintaining high performance.
 - 4-bit quantization (NF4 Quantization + Double Quantization)
 - LoRA (Low-Rank Adapters) for efficient parameter fine-tuning

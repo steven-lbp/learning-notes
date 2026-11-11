@@ -97,3 +97,8 @@ Student 只看问题，Teacher 额外看参考答案或解法。虽然模型同�
 - **DeepSeek：比较整套选择。** 同时看 A、B、C 的概率分布，既看到学生过于偏好 A，也看到老师更偏好 B，利用完整分布来指导调整。
 
 Full-vocabulary 仍然可以是 on-policy：**回答由学生生成，只是在回答经过的位置比较完整词表，而不是遍历所有可能的回答。**
+
+## 相关笔记
+
+- [PPO 与 GRPO](../rl/ppo-grpo.md)
+- [DeepSeek-R1](../../model-studies/deepseek-r1/deepseek-r1.md)

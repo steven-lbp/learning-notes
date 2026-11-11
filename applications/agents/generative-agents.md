@@ -9,7 +9,7 @@ comprehensive list of the agent’s experiences.
 The retrieval function scores all memories as a weighted
 combination of the three elements.(all $\alpha$ s are set to 1)
 $$score = \alpha_{recency} \cdot recency + \alpha_{relevance} \cdot relevance + \alpha_{importance} \cdot importance $$
-![](./image/2.png)
+![](images/2.png)
 
 - relevance
 
@@ -33,10 +33,10 @@ signing a higher score to memory objects that the agent believes to
 be important. Directly ask the language model to output an integer
 score is effective. The full prompt appears below:
 
-![](./image/1.png)
+![](images/1.png)
 
 ### Reflection
-![](./image/3.png)
+![](images/3.png)
 1. Ask Question 
 
 Determine what to reflect on by identifying questions that can be asked given the agent’s recent experiences. 
