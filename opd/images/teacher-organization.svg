@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="650" viewBox="0 0 1100 650" role="img" aria-labelledby="title desc">
+  <title id="title">历史阶段 Teacher 与领域专家 Teacher 的区别</title>
+  <desc id="desc">左侧 GLM-5 顺序训练并保存历史 checkpoint，最后跨阶段蒸馏；右侧 MiMo 和 DeepSeek 的典型模式是多个领域专家共同向一个 Student 蒸馏。</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L8 4 L0 8 Z" fill="#64748b"/></marker>
+    <marker id="purple-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 L8 4 L0 8 Z" fill="#7c3aed"/></marker>
+    <style>
+      text{font-family:Arial,'PingFang SC','Microsoft YaHei',sans-serif;fill:#1e293b;text-anchor:middle}
+      .heading{font-size:22px;font-weight:700}
+      .label{font-size:17px;font-weight:600}
+      .small{font-size:14px;fill:#64748b}
+      .flow{fill:none;stroke:#64748b;stroke-width:2;marker-end:url(#arrow)}
+      .teach{fill:none;stroke:#7c3aed;stroke-width:2;stroke-dasharray:6 4;marker-end:url(#purple-arrow)}
+      .stage{fill:#e8f0ff;stroke:#c7d9fc}
+      .expert{fill:#e7f5ec;stroke:#b7ddc6}
+      .distill{fill:#f1eaff;stroke:#d7c4fb}
+    </style>
+  </defs>
+  <rect width="1100" height="650" fill="#ffffff"/>
+  <text x="550" y="39" class="heading">Teacher 的来源：历史阶段 vs 领域专家</text>
+  <rect x="20" y="66" width="515" height="527" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+  <rect x="555" y="66" width="525" height="527" rx="16" fill="#f8fafc" stroke="#e2e8f0"/>
+  <text x="277" y="104" class="heading">GLM-5：跨阶段能力恢复</text>
+  <text x="277" y="131" class="small">一条训练链上的历史 checkpoint</text>
+  <rect x="58" y="158" width="195" height="48" rx="9" class="stage"/>
+  <text x="155" y="188" class="label">Overall SFT</text>
+  <path d="M155 206 V230" class="flow"/>
+  <rect x="58" y="232" width="195" height="48" rx="9" class="stage"/>
+  <text x="155" y="262" class="label">Reasoning RL</text>
+  <path d="M155 280 V304" class="flow"/>
+  <rect x="58" y="306" width="195" height="48" rx="9" class="stage"/>
+  <text x="155" y="336" class="label">Agentic RL</text>
+  <path d="M155 354 V378" class="flow"/>
+  <rect x="58" y="380" width="195" height="48" rx="9" class="stage"/>
+  <text x="155" y="410" class="label">General RL</text>
+  <path d="M155 428 V476" class="flow"/>
+  <rect x="299" y="232" width="193" height="48" rx="9" class="expert"/>
+  <text x="395" y="262" class="label">历史 Teacher A</text>
+  <path d="M253 256 H297" class="flow"/>
+  <rect x="299" y="380" width="193" height="48" rx="9" class="expert"/>
+  <text x="395" y="410" class="label">历史 Teacher B</text>
+  <path d="M253 404 H297" class="flow"/>
+  <path d="M395 280 V330 H510 V449 H380 V476" class="teach"/>
+  <path d="M395 428 V476" class="teach"/>
+  <rect x="58" y="478" width="434" height="61" rx="10" class="distill"/>
+  <text x="275" y="504" class="label">Cross-Stage OPD</text>
+  <text x="275" y="525" class="small">当前 Student 恢复先前阶段能力</text>
+  <text x="277" y="570" class="small">虚线：历史 Teacher 提供蒸馏监督</text>
+  <text x="817" y="104" class="heading">MiMo / DeepSeek：领域能力融合</text>
+  <text x="817" y="131" class="small">按任务向合适的领域 Teacher 学习</text>
+  <rect x="704" y="158" width="228" height="48" rx="9" class="stage"/>
+  <text x="818" y="188" class="label">共享基础 / SFT 起点</text>
+  <path d="M818 206 V231 H651 V258" class="flow"/>
+  <path d="M818 206 V258" class="flow"/>
+  <path d="M818 206 V231 H985 V258" class="flow"/>
+  <rect x="578" y="260" width="146" height="73" rx="9" class="expert"/>
+  <text x="651" y="287" class="label">Math Teacher</text>
+  <text x="651" y="312" class="small">数学领域训练</text>
+  <rect x="745" y="260" width="146" height="73" rx="9" class="expert"/>
+  <text x="818" y="287" class="label">Code Teacher</text>
+  <text x="818" y="312" class="small">代码领域训练</text>
+  <rect x="912" y="260" width="146" height="73" rx="9" class="expert"/>
+  <text x="985" y="287" class="label">Agent Teacher</text>
+  <text x="985" y="312" class="small">Agent 领域训练</text>
+  <path d="M651 333 V358 H790 V390" class="teach"/>
+  <path d="M818 333 V390" class="teach"/>
+  <path d="M985 333 V358 H846 V390" class="teach"/>
+  <rect x="641" y="392" width="354" height="59" rx="10" class="distill"/>
+  <text x="818" y="417" class="label">Multi-Teacher OPD</text>
+  <text x="818" y="438" class="small">各方案选择自己的监督与优化方式</text>
+  <path d="M818 451 V476" class="flow"/>
+  <rect x="704" y="478" width="228" height="61" rx="10" class="stage"/>
+  <text x="818" y="504" class="label">统一 Student</text>
+  <text x="818" y="525" class="small">自己 rollout，融合多领域能力</text>
+  <text x="817" y="570" class="small">专家彼此没有必须串行继承的关系</text>
+  <text x="550" y="625" class="small">依据学习对话补画的关系示意图；领域划分和箭头不代表全部工程细节。</text>
+</svg>
