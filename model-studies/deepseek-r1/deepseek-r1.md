@@ -1,148 +1,151 @@
 # DeepSeek-R1
 
-## Model Structure
+## Model structure
+
+DeepSeek-R1 基于 DeepSeek-V3-Base。这里先记录主干与部署设计，再看 R1 的后训练流程。
+
+DeepSeek-R1 builds on DeepSeek-V3-Base. The following sections cover backbone and deployment designs, followed by R1 post-training.
+
 ![20250202211854.png](images/20250202211854.png)
-### 1. Load Balancing Strategy(MoE)
-- high-load experts
 
-The high-load experts are detected based on statistics collected during the online deployment and are adjusted periodically (e.g., every 10 minutes)
+### 1. MoE load balancing
 
-- redundant experts(dynamic)
+部署时根据线上统计识别高负载专家，定期调整，例如每 10 分钟更新一次。为热点专家增加冗余副本，可以让 Token 在 GPU 之间分布得更均衡。
 
-Redundant experts are copys of high-load experts. In every GPU(total 32), except for 8 experts, there is a redundant expert to make sure every GPU is processing similar amount of token.
+原 Prefill 部署示例使用 32 张 GPU，每张放置 8 个专家并增加一个冗余专家副本，以缓解计算负载倾斜。
 
-### 2. Multi-head Latent Attention
-The core of MLA is the low-rank joint compression for attention keys and values to reduce Key-Value (KV) cache during inference.
+Deployment statistics identify heavily loaded experts, with periodic updates such as every 10 minutes. Redundant copies of hot experts help balance token workloads across GPUs.
 
-### 3. Pipeline Parallelism
-#### MoE Parallelism
-- **computational and communication tasks**
+The Prefill deployment example uses 32 GPUs, with 8 experts and one redundant expert copy per GPU to reduce load imbalance.
 
-In this parallelism strategy, while one GPU is executing computational tasks (such as the forward pass, backpropagation, or any other computation), it can simultaneously receive data from another GPU.
+### 2. MLA
+
+MLA 对 Attention 的 K/V 做低秩联合压缩，降低推理时 KV Cache 的大小。
+
+MLA jointly compresses Attention keys and values into a low-rank representation, reducing inference KV Cache storage.
+
+### 3. Computation–communication overlap
+
+在 MoE 与流水线并行中，让 GPU 计算与通信重叠：一边执行前向、反向等计算，一边接收或发送其他设备的数据。
+
+MoE and pipeline execution overlap GPU computation with communication. A GPU can execute forward or backward work while receiving or sending data to other devices.
 
 ![20250202205001.png](images/20250202205001.png)
 
-### 4. Multi_token Prediction
+### 4. Multi-Token Prediction
 
-When input is t2, t3, t4, t5,  the model will predict t6 and t7 simutaneously.
+DeepSeek-V3 主干训练加入 MTP，在当前上下文上预测多个未来位置，提高训练信号的利用率。图中可理解为在已有 Token 上增加后续多个位置的预测任务。
+
+DeepSeek-V3 backbone training uses MTP to predict multiple future positions from the current context, making better use of training signals. The diagram adds prediction tasks for multiple future positions to the existing token context.
 
 ![20250202205605.png](images/20250202205605.png)
 
-## Training Strategy
+[DeepSeek-V3 technical report](https://arxiv.org/html/2412.19437v1)
 
-### 5. Reinforce Learning
+## Training strategy
 
-#### a. Using GRPO replace PPO
+### 1. Why RL and GRPO
 
-Classic ChatGPT: Pre-Training + SFT + RLHF(PPO + Reward Model: Learn human preference)
+常见后训练流程是 SFT → RLHF。SFT 通过参考答案学习生成方式；RL 根据奖励评价采样回答，鼓励更好的结果。
 
-O1: PRM, CoT
+DeepSeek 使用 GRPO，在同一问题的一组回答中计算相对 Advantage，省去单独的 Critic 模型。
 
-1. Why do we need RL?
+A common post-training flow is SFT → RLHF. SFT learns from reference answers; RL evaluates sampled responses with rewards and favors better outcomes.
 
-SFT can not provide negative feedback;
+DeepSeek uses GRPO to calculate relative Advantage within a group of responses to the same prompt, avoiding a separate Critic model.
 
-SFT lack of understanding of backward aapabilities;
+### 2. PPO, DPO, and GRPO
 
-SFT responses in token level, whereas RLHF (Reinforcement Learning with Human Feedback) gives responses at a much broader level, treating the entire text as a whole.
+PPO 式 RLHF 常涉及以下模型：
 
-2. Types of RL
+- **Policy：** 当前训练的模型。
+- **Reference：** 提供 KL 约束的固定参考模型。
+- **Reward Model：** 评价回答质量。
+- **Value Model：** 估计状态对应的预期回报。
 
-- PPO ChatGPT(Best)
+PPO-style RLHF commonly involves:
+
+- **Policy:** the model being trained.
+- **Reference:** a fixed model supplying the KL baseline.
+- **Reward Model:** evaluates response quality.
+- **Value Model:** estimates expected return for a state.
+
 ![](images/20250204234222.png)
 
-a. Policy Model: The model that we are training
+DPO 直接从偏好数据优化模型；GRPO 则用组内相对奖励估计 Advantage，减少对 Value Model 的依赖。
 
-b. Reference Model: Fixed benchmark model, used to caculate the KL Divergence(Prevent excessive changes)
+DPO optimizes the model directly from preference data. GRPO estimates Advantage from group-relative rewards, reducing reliance on a Value Model.
 
-c. Reward Model: Caculate the output of the model is good or bad
-
-d. Value Model: Estimate the long-term rewards of a certain state
-
-
-DPO LLama(Fastest)
-
-GRPO Deepseek(Cheapest)
 ![](images/20250204234318.png)
 
-3. Reward in RL
+### 3. Reward signals
 
-Rewards during training(PRM: Per-Token Reward Mechanism)
-- Advantage: It allows fine-grained correction and optimization at every step
+- **PRM：** 提供中间步骤的过程反馈，信号更细，但构造和验证更复杂，也可能被模型钻空子。
+- **ORM：** 根据最终答案打分，验证更直接，但难以定位每一步的贡献。
 
-- Disadvantage: requires a lot of attention to the reward signal, which can sometimes lead to "reward hacking" 
+DeepSeek-R1-Zero 主要使用 Accuracy reward 和 Format reward，分别评价结果正确性和推理输出格式。
 
-Rewards based on the final result(ORM: Overall Result-based Reward Mechanism)
-- Advantages: It only requires the final outcome to be standardized and doesn't focus on every token. This simplifies the process and avoids the issues seen with token-based rewards.
-- Disadvantages: The reward assignment can become somewhat imprecise or blurry, making it harder to provide nuanced corrections during training.
+- **PRM:** provides feedback on intermediate reasoning steps, with finer signals but more complex construction and validation, and potential reward hacking.
+- **ORM:** scores the final outcome, simplifying verification while providing less information about individual steps.
 
-4. Reward in Deepseek
-- Accurancy reward
-- Format reward(CoT)
+DeepSeek-R1-Zero mainly uses Accuracy and Format rewards to evaluate answer correctness and reasoning-output structure.
 
-#### b. New studying process
-##### Deepseek-r1-zero
-Deepseek-r1-zero: without supervised fine tunning, only using the reinforcelearning and reward model based on rules, the model can generate a CoT with reflection(反思)
+## DeepSeek-R1-Zero
 
-input: sys_msg + question
+R1-Zero 从 Base Model 直接进行 RL，不先做 SFT，主要依赖规则奖励。输入由 System Message 和问题构成。
+
+训练中逐步出现更长的推理链、自检与反思行为。针对同一问题多次采样并多数投票，还可以提高最终答案的可靠性。
+
+R1-Zero applies RL directly to a Base Model without an initial SFT stage, relying primarily on rule-based rewards. Inputs contain a System Message and a question.
+
+Training progressively elicits longer reasoning chains, self-checking, and reflection. Multiple samples with majority voting can further improve final-answer reliability.
+
 ![](images/20250206111745.png)
 
-- **No Fine-Tuning (SFT) Required**: Deepseek-r1-zero proved that  only processing reinforcelearning on the base model, the model can achieve a strong reasoning ability.
+## DeepSeek-R1
 
-- **Multiple Sampling Strategy**: By sampling multiple responses for a single prompt and selecting the most frequently occurring answer, the model's performance can be further improved.
+先用 Cold Start 和面向推理的 RL 获得高质量推理数据，再结合通用数据进行 SFT，最后执行全场景 RL。
 
-- **Self-Improvement with Training Steps**: As training progresses, the "r1 zero" model tends to generate longer responses (such as detailed "chain-of-thought" reasoning) and even starts showing **reflective** behavior. This suggests that the model improves itself during training without external intervention.
+Cold Start and reasoning-oriented RL first produce strong reasoning data. SFT then combines reasoning and general-purpose data, followed by RL across all scenarios.
 
-- **Longer Responses Reflect Deeper Thought**: As training continues, the responses become longer, indicating that the model is "thinking" more deeply or reasoning in more detail.
-
-##### Deepseek-r1
 ![](images/20250206114831.png)
 
-Stage 1: train a model to generate data for stage 2
+### 1. Cold Start
 
-Stage 2: train a model for all scenarios
+用少量高质量长 CoT 数据做 SFT，改善可读性和输出结构。数据可来自 Few-shot Prompt、引导检查答案的 Prompt、R1-Zero 的部分输出，以及人工整理。输出组织为推理过程与最终答案，原笔记用下面的结构示意。
 
-1. Stage 1:Cold Start(on SFT)
-- few shot: using long CoT as example in prompt
-- tell the model to reflect and varify the answer in prompt
-- collect part of the result in Deepseek-r1-zero
-- post-processing by human
-- follow the format(Due to the shortcome of r1-zero is that the output format may be not readable for users, in r1, the output should follow the format to flitter the unneccessary information by only showing the user <summary>)
+SFT on a small set of high-quality long-CoT examples improves readability and output structure. Data can come from few-shot prompts, prompts encouraging answer verification, selected R1-Zero outputs, and human curation. Outputs separate reasoning from the final answer, illustrated by the original note's schematic below.
+
 ```
 |special token|<reasoning_processing>special|<summary>|
 ```
 
-2. Stage 1: Reasoning-oriented Reinforcement Learning
-- a language consistency reward during RL training(overcome the shortcome of r1-zero)
-- reward the result
+### 2. Reasoning-oriented RL
 
-3. Stage 2: Rejection Sampling and Supervised Fine-Tuning
+继续用结果奖励提升推理能力，并加入语言一致性奖励，减少 R1-Zero 中的语言混杂问题。
 
-this stage incorporates data from other domains to enhance the
-model’s capabilities in writing, role-playing, and other general-purpose tasks
-- Reasoning data: 
+Outcome rewards further improve reasoning, while a language-consistency reward reduces the language mixing observed in R1-Zero.
 
-rejection sampling from the checkpoint from the above RL training to filtered out chain-of-thought with mixed languages, long parapraphs, and code block
+### 3. Rejection Sampling and SFT
 
-- Non-Reasoning data:
+从推理 RL 的 Checkpoint 多次采样，保留正确答案，并过滤混杂语言、过长段落和不合适的代码块等低可读性输出。
 
-For certain non-reasoning tasks, we call DeepSeek-V3 to generate a potential chain-of-thought before answering the question by prompting. However, for simpler queries, such as “hello” we do not provide a CoT in response
+同时加入写作、角色扮演、事实问答等非推理数据。部分任务用 DeepSeek-V3 生成 CoT；简单问候等任务直接回答。
 
-4. Stage 2: Reinforcement Learning for all Scenarios
+Sample multiple responses from the reasoning-RL checkpoint, retain correct answers, and filter outputs with mixed languages, overly long paragraphs, or unsuitable code blocks.
 
-Using a combination of reward signals and diverse prompt distributions.
-- Reasoning data
-- General data
-- Helpfulness
-- Harmlessness
+Add non-reasoning data for writing, role-playing, factual QA, and other general tasks. Some use CoT generated by DeepSeek-V3; simple greetings receive direct answers.
 
-#### c. New dissertion
-Using the data generated by deepseek-r1 to sft small model can significantly improve the reasoning ability.
+### 4. RL for all scenarios
 
-For distilled models, we apply only SFT and do not include an RL stage.
+结合不同 Prompt 分布和奖励信号，兼顾推理、通用能力、Helpfulness 和 Harmlessness。
 
-## 相关笔记
+Combine diverse prompt distributions and reward signals to balance reasoning, general capabilities, Helpfulness, and Harmlessness.
 
-- [Transformer](../../foundations/transformer/transformer.md)
-- [PPO 与 GRPO](../../post-training/rl/ppo-grpo.md)
-- [OPD](../../post-training/opd/opd.md)
+## Distillation
+
+使用 DeepSeek-R1 生成的数据，对小模型执行 SFT，可以迁移推理能力。论文中的这些蒸馏模型只做 SFT，没有额外的 RL 阶段。
+
+SFT on data generated by DeepSeek-R1 transfers reasoning capabilities to smaller models. The paper's distilled models use SFT without an additional RL stage.
+
+[DeepSeek-R1 paper](https://arxiv.org/html/2501.12948v1)

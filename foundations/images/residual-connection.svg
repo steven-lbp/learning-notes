@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="445" viewBox="0 0 760 445" role="img" aria-labelledby="title desc">
+<title id="title">普通网络与残差连接</title>
+<desc id="desc">左侧输入经过 F(x) 后输出；右侧输入另有一条绿色路径，绕过 F(x)，在输出端与变换结果相加。</desc>
+<!-- 原图来自学习对话“解释策略概率”，将两张 SVG 合并为并排比较。 -->
+<style>svg{color:#334155}text{font-family:Arial,'PingFang SC','Microsoft YaHei',sans-serif}.heading{font-size:22px;font-weight:700;fill:#1e293b;text-anchor:middle}.label{font-size:18px;fill:#475569;text-anchor:middle}</style>
+<rect width="760" height="445" fill="#fff"/>
+<text x="380" y="35" class="heading">残差连接：多一条输入直接相加的路径</text>
+<rect x="20" y="60" width="340" height="345" rx="15" fill="#f8fafc" stroke="#e2e8f0"/>
+<rect x="400" y="60" width="340" height="345" rx="15" fill="#f0fdfa" stroke="#99f6e4"/>
+<text x="190" y="91" class="label">普通网络</text>
+<text x="570" y="91" class="label">残差网络</text>
+<svg x="78" y="105" width="224" height="294" viewBox="0 0 160 210"><g stroke="#64748B" fill="none" stroke-width="2"><path d="M80 37 V72 M80 123 V161" /><path d="M75 65 L80 73 L85 65 M75 154 L80 162 L85 154" /></g><text x="80" y="25" text-anchor="middle" fill="currentColor" font-size="14">x</text><rect x="28" y="74" width="104" height="48" rx="9" fill="#64748B" fill-opacity=".12" stroke="#64748B" /><text x="80" y="101" text-anchor="middle" fill="currentColor" font-size="14">F(x)</text><text x="80" y="187" text-anchor="middle" fill="currentColor" font-size="13">y = F(x)</text></svg>
+<svg x="458" y="105" width="224" height="294" viewBox="0 0 160 210"><g stroke="#64748B" fill="none" stroke-width="2"><path d="M68 37 V72 M68 123 V146" /><path d="M63 65 L68 73 L73 65" /><path d="M63 138 L68 146 L73 138" /></g><path d="M68 48 H145 V149 H83" stroke="#0D9488" stroke-width="2.5" stroke-linecap="round" fill="none" /><path d="M91 144 L83 149 L91 154" stroke="#0D9488" stroke-width="2" fill="none" /><text x="68" y="25" text-anchor="middle" fill="currentColor" font-size="14">x</text><rect x="18" y="74" width="100" height="48" rx="9" fill="#64748B" fill-opacity=".12" stroke="#64748B" /><text x="68" y="101" text-anchor="middle" fill="currentColor" font-size="14">F(x)</text><circle cx="68" cy="149" r="15" fill="#0D9488" fill-opacity=".15" stroke="#0D9488" stroke-width="2" /><text x="68" y="154" text-anchor="middle" fill="currentColor" font-weight="bold" font-size="17">+</text><path d="M68 165 V173" stroke="#64748B" stroke-width="2" /><text x="80" y="191" text-anchor="middle" fill="currentColor" font-size="13">y = x + F(x)</text></svg>
+<text x="380" y="432" class="label">绿色路线让输入直接参与输出，也为梯度提供直接路径。</text>
+</svg>

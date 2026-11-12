@@ -1,111 +1,171 @@
-# PPO 与 GRPO
-### 本质区别：**baseline 的来源**
+# 策略梯度、PPO 与 GRPO
 
-- PPO：
+**强化学习先评价模型的回答，再调整参数，让模型更倾向于生成表现好的回答。**
 
-使用单独的 **Value Model $V(s)$** 预测 baseline → 更通用，但训练复杂，易引入估值误差。
+**RL evaluates model responses, then adjusts parameters to favor better-performing responses.**
 
-$$
-A = R - V(s)
-$$
+## 1. 策略概率是什么意思？
 
-- GRPO：
+$\pi_\theta$ 表示模型的策略；$\pi_\theta(o\mid q)$ 表示这个模型面对问题 $q$ 时，生成回答 $o$ 的概率。
 
-用同一 prompt 下的多个回答的 **组内平均得分 $\mu_G$** 作为 baseline → 更轻量、更稳定。
+| 符号 | 含义 |
+| --- | --- |
+| $\pi$ | Policy，给定上下文时的输出概率分布 |
+| $\theta$ | 模型参数 |
+| $q$ | 输入问题或 prompt |
+| $o$ | 模型生成的回答 |
+| $\log\pi_\theta(o\mid q)$ | 生成这个回答的自然对数概率 |
 
-$$
-A_i^G = \frac{R(o_i) - \mu_G}{\sigma_G + \epsilon}
-$$
+例如生成某个回答的概率是 0.8，它的 log 概率约为 −0.223。**概率越大，对数概率也越大，越接近 0。**
 
-### 核心直觉
-
-| 场景      | PPO 的做法                                | GRPO 的做法                |
-| ------- | -------------------------------------- | ----------------------- |
-| 老师问一个问题 | 预测“这题你大概能考 80 分”，然后比较你实际得了多少（预测 vs 实际） | 直接看这一组同学谁考得高，奖励组内比别人高的人 |
-| 要训练的    | Value 模型 + 策略模型                        | 只训练策略模型                 |
-| 学习信号    | $R - V$：你表现比预期好                        | $R - \mu$：你在组里表现比别人好    |
-
-
-### 为什么 GRPO 更适合语言大模型？
-
-1. **语言模型的“状态”复杂**：不像游戏环境那样有明确状态，Value Model 很难准确估计 $V(s)$
-2. **直接从输出分数计算相对表现更简单有效**
-3. **减少训练结构复杂性**，只训练一个策略模型
-4. **组内比较自然支持排序学习**，能强化相对优质的生成内容（例如回答、摘要）
-
-## GRPO
+如果 $o$ 是完整回答，整段回答的 log 概率就是每个 Token 的 log 概率之和：
 
 $$
- \mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^{G} \log \pi_\theta(o_i | q) \cdot A_i^G + \beta \cdot D_{\text{KL}} (\pi_{\theta_{\text{old}}} \parallel \pi_\theta)
+\log\pi_\theta(o\mid q)
+=\sum_t\log\pi_\theta(o_t\mid q,o_{<t})
 $$
 
-### 群体相对优势
+每个 Token 的上下文包含问题和此前已经生成的内容。
+
+$\pi_\theta$ is the model's policy, and $\pi_\theta(o\mid q)$ is the probability of generating response $o$ for prompt $q$.
+
+| Symbol | Meaning |
+| --- | --- |
+| $\pi$ | Output probability distribution given the context |
+| $\theta$ | Model parameters |
+| $q$ | Input prompt |
+| $o$ | Generated response |
+| $\log\pi_\theta(o\mid q)$ | Natural logarithm of the response probability |
+
+A probability of 0.8 has a log probability of about −0.223. **Higher probabilities have higher log probabilities, closer to 0.**
+
+For a complete response, the log probability is the sum of token log probabilities, as shown above. Each token is conditioned on the prompt and all preceding tokens.
+
+## 2. Advantage 如何影响概率？
+
+**Advantage（$A$）表示这次回答相对 baseline 好多少。** 用单个样本的策略梯度损失理解更新方向：
 
 $$
- A_i^G = \frac{R(o_i) - \mu_G}{\sigma_G + \epsilon}
+L=-A\log\pi_\theta(o\mid q)
 $$
 
-**含义**：
+把 $A$ 看作本次更新的固定分数：
 
-* $R(o_i)$：对每个回答打分（来自奖励模型、打标签或规则评估）
-* $\mu_G$：该 prompt 下，组内回答的平均分
-* $\sigma_G$：组内得分标准差
-* $A_i^G$：表示这个回答相对其他人**好多少**
+| Advantage | 含义 | 最小化 Loss 的方向 |
+| --- | --- | --- |
+| $A>0$ | 比基准好 | 提高这个回答的生成概率 |
+| $A<0$ | 比基准差 | 降低这个回答的生成概率 |
+| $A=0$ | 与基准相当 | 该项不提供梯度信号 |
 
-**总结**：这是一个“标准分（Z-score）”，表示**在组内的位置优势**
+当 $A>0$，概率越大 → log 概率越大 → 乘上负的 $A$ 后 Loss 越小。因此，训练会鼓励提高这个回答的概率。
 
----
-### 对数概率
+**Advantage ($A$) measures how much better a response is than its baseline.** The single-sample policy-gradient Loss above shows the update direction when $A$ is treated as fixed for the update.
 
-$$
-\log \pi_\theta(o_i \mid q)
-$$
-模型在参数为 $\theta$ 的状态下，输出 $o_i$ 这个回答的**对数概率**。
+| Advantage | Meaning | Direction favored by minimizing Loss |
+| --- | --- | --- |
+| $A>0$ | Better than baseline | Increase the response probability |
+| $A<0$ | Worse than baseline | Decrease the response probability |
+| $A=0$ | Equal to baseline | No gradient signal from this term |
 
-* $\pi_\theta$：表示模型（就是你的大语言模型）
-* $o_i$：模型输出的一段文字（如一个回答）
-* $q$：是输入的 prompt（比如一个问题）
+For positive $A$, increasing the probability increases its log probability. Multiplication by negative $A$ then lowers Loss, encouraging the model to increase that response's probability.
 
-> **为什么用 log？**
-> log 概率更稳定、更适合做梯度计算（机器学习中的常规技巧）
+## 3. Loss 怎么变成参数更新？
 
----
-### 核心目标项：组内损失
+先对 Loss 求梯度，再由优化器更新参数。以普通 SGD 为例：
 
 $$
- \frac{1}{G} \sum_{i=1}^{G} \log \pi_\theta(o_i | q) \cdot A_i^G
+\begin{aligned}
+\nabla_\theta L
+&=-A\nabla_\theta\log\pi_\theta(o\mid q)\\
+\theta_{\mathrm{new}}
+&=\theta_{\mathrm{old}}-\eta\nabla_\theta L\\
+\Delta\theta
+&=\eta A\nabla_\theta\log\pi_\theta(o\mid q)
+\end{aligned}
 $$
 
-**逐层解释**：
+- **$\nabla_\theta$：** 对模型参数求梯度。$\nabla_\theta\log\pi_\theta$ 给出提高该回答 log 概率的局部方向。
+- **$\eta$：** 学习率，决定沿这个方向走多远。
+- **$\Delta\theta$：** 新参数减旧参数，即 $\theta_{\mathrm{new}}-\theta_{\mathrm{old}}$。
+- **$\propto$：** 成正比。写 $\Delta\theta\propto A\nabla_\theta\log\pi_\theta$，是在省略正的学习率，突出方向关系。
 
-* $\log \pi_\theta(o_i | q)$：模型生成第 $i$ 个回答的 log 概率
-* 乘上优势 $A_i^G$：
+**A 决定顺着还是逆着这个方向更新，梯度决定参数怎样变化。** Adam 等优化器还会结合梯度历史调整实际更新。
 
-  * 如果该回答比别人好（$A > 0$），就要**提升它的概率**
-  * 如果该回答拉胯（$A < 0$），就要**降低它的概率**
-* 对所有样本求平均 $\frac{1}{G} \sum$：整组一起学习，提升“组整体质量”
-* 负号：因为我们用 **梯度下降（最小化）**，但希望目标是 **最大化优势**
+Differentiate Loss with respect to the parameters, then let the optimizer apply the update. The equations above use ordinary SGD.
 
-**总结**：这是让模型在每组中，**更偏向于生成那些“表现好”的回答**
+- **$\nabla_\theta$** takes the gradient with respect to model parameters. The log-probability gradient points in the local direction that increases the response's log probability.
+- **$\eta$** is the learning rate and controls step size.
+- **$\Delta\theta$** is the new parameter vector minus the old one.
+- **$\propto$** means proportional to; it omits the positive learning rate to emphasize the direction.
 
----
+**Advantage determines whether to follow or oppose the log-probability gradient; the gradient determines how parameters change.** Optimizers such as Adam also use gradient history.
 
-### 控制项：KL 散度惩罚
+## 4. PPO 与 GRPO 的核心区别
+
+两者都使用 Advantage 指导策略更新，关键区别是 **baseline 从哪里来**。
+
+| 维度 | PPO | GRPO |
+| --- | --- | --- |
+| 基准来源 | 学习一个 Value 函数，估计当前状态的预期回报 | 同一问题下，一组回答的平均奖励 |
+| 怎样理解 Advantage | 实际表现相对预期好多少 | 这个回答相对同组回答好多少 |
+| 额外的 Value / Critic | 通常需要 | 不需要 |
+| 学生考试的类比 | 和“预计能考的分数”比较 | 和“同组同学的平均分”比较 |
+
+PPO 常结合 Value 函数和后续奖励来估计 Advantage；GRPO 则用组内相对得分，减少训练 Value 模型的显存与计算开销。代价是每道题需要采样一组回答进行比较。[PPO 论文](https://arxiv.org/abs/1707.06347)、[DeepSeekMath §4.1](https://arxiv.org/html/2402.03300v3#S4.SS1)
+
+Both methods use Advantage to guide policy updates. The main distinction is **where the baseline comes from**.
+
+| Aspect | PPO | GRPO |
+| --- | --- | --- |
+| Baseline | A learned Value function estimating expected return | Mean reward of responses to the same prompt |
+| Advantage intuition | Performance relative to expectation | Performance relative to the group |
+| Additional Value / Critic model | Usually required | Not required |
+| Exam analogy | Compare with the expected score | Compare with classmates' mean score |
+
+PPO often combines Value estimates with subsequent rewards. GRPO uses group-relative scores to save the memory and compute needed for a Value model, while requiring a group of sampled responses per prompt.
+
+## 5. GRPO 怎样计算组内优势？
+
+以最终结果奖励为例：
+
+1. 对同一个问题采样一组回答。
+2. 用规则、验证器或奖励模型打分。
+3. 用组内均值作比较基准，并按标准差缩放。
+4. 根据 Advantage 更新策略。
 
 $$
- \beta \cdot D_{\text{KL}}(\pi_{\theta_{\text{old}}} \parallel \pi_\theta)
+A_i=\frac{R(o_i)-\mu_G}{\sigma_G+\epsilon}
 $$
 
-**含义**：
+其中 $R(o_i)$ 是当前回答的奖励，$\mu_G$、$\sigma_G$ 是组内奖励的均值和标准差；$\epsilon$ 用于避免分母为零。
 
-* $\pi_{\theta_{\text{old}}}$：旧版本模型（上一步或SFT模型）
-* $\pi_\theta$：当前模型
-* $D_{\text{KL}}$：衡量两个分布差距（越小越相似）
-* $\beta$：系数（控制惩罚强度）
+例如同一道题的回答分别得 1、0、1 分，两个 1 分回答的 Advantage 为正，0 分回答为负。
 
-**作用**：防止模型跑偏，生成风格“失控”。
+For outcome rewards:
 
-* 比如，如果模型突然学会用一些奇怪的方式回答，只为了骗过奖励模型，这就不行。
-* KL 惩罚确保模型**不会变得太不一样**，保持稳定性和“原有风格”。
+1. Sample a group of responses to one prompt.
+2. Score them with rules, verifiers, or a reward model.
+3. Subtract the group mean and scale by the standard deviation.
+4. Update the policy using the resulting Advantage.
 
-**总结**：KL 项是一个“约束绳索”，防止模型发散，确保可控、平稳地学习。
+In the formula above, $R(o_i)$ is the response reward; $\mu_G$ and $\sigma_G$ are the group mean and standard deviation. $\epsilon$ avoids division by zero.
+
+For rewards 1, 0, and 1, the two successful responses have positive Advantage and the unsuccessful response has negative Advantage.
+
+## 6. 更新时怎样控制变化？
+
+| 机制 | 控制什么 |
+| --- | --- |
+| PPO / GRPO 的 clipping | 根据新旧策略的 Token 概率比，裁剪目标中继续推动某些变化的收益 |
+| KL 惩罚 | 约束当前策略与参考策略的分布差异；参考模型常取训练初始的 SFT 模型 |
+| 梯度裁剪 | 在优化器更新前限制梯度范数 |
+
+**旧策略**是生成当前这批 rollout 的策略版本；**参考策略**是 KL 对齐的基准。两者在训练中承担不同角色。[DeepSeekMath §4.1.1](https://arxiv.org/html/2402.03300v3#S4.SS1.SSS1)
+
+| Mechanism | What it controls |
+| --- | --- |
+| PPO / GRPO clipping | Limits the objective's incentive for certain changes, using new-to-old token probability ratios |
+| KL penalty | Constrains distribution differences from a reference policy, often the initial SFT model |
+| Gradient clipping | Limits the gradient norm before the optimizer update |
+
+The **old policy** generated the current rollout batch. The **reference policy** provides the KL baseline. They have different roles during training.

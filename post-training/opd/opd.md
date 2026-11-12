@@ -4,6 +4,8 @@
 
 下文用 Student 表示待训练的学生模型，Teacher 表示提供指导的老师模型。
 
+**OPD means the Student generates its own attempts, and the Teacher guides the steps the Student actually takes.** Here, Student is the model being trained and Teacher is the model providing guidance.
+
 ## 1. 为什么需要 OPD？
 
 可以用学下棋来理解三种学习方式：
@@ -16,19 +18,35 @@
 
 这里的“奖励稀疏”特指只给最终结果的 RL（ORM）；RL 也可以提供过程奖励（PRM）。
 
+Chess provides a useful analogy:
+
+| Method | Analogy | Strength and limitation |
+| --- | --- | --- |
+| RL with only outcome rewards | Play independently and learn only whether the game was won | Practice your own moves, but receive little guidance about individual steps |
+| Offline distillation / common SFT | Imitate a master's recorded games | Dense targets at each step, but the master's positions may differ from yours |
+| OPD | Play independently with a coach guiding the current position | Practice states you actually encounter and receive stepwise feedback |
+
+Sparse rewards here refer to outcome-only RL with an ORM. RL can also use process rewards from a PRM.
+
 ### 离线学习的两个问题
 
-**分布偏移 / Exposure Bias（暴露偏差）：训练看老师的路径，推理走自己的路径。**
+**分布偏移 / Exposure Bias：训练看老师的路径，推理走自己的路径。**
 
 训练时，学生接着 Teacher 或参考答案的前文往下写；推理时，却要接着自己生成的前文写。一旦偏离参考路径，就可能遇到训练没充分覆盖的状态，不知道怎么纠错，错误便可能累积。
 
-**Confident Conflict（强迫冲突）：学生很确信另一种续写，却被要求模仿指定的 Token。**
+**Confident Conflict：学生很确信另一种续写，却被要求模仿指定的 Token。**
 
 当学生已经很有把握，却被外部答案要求输出一个自己认为很不可能的 Token 时，就出现了监督冲突。持续拟合这些冲突，可能扰动原有能力、加重遗忘。这里不只是“目标概率低”，也包括“学生对另一种选择很确信”。参考 [Diao et al.](https://arxiv.org/abs/2601.02151)。
 
 前者关注**走到的状态不同**，后者关注**当前状态下的选择冲突**，两者不能直接画等号。
 
-OPD 的思路是：让老师来指导学生自己的路径，减少训练与实际使用之间的差距。它能提供更密集的学习信号，但不保证消除所有错误或遗忘。
+OPD 的思路是：让老师来指导学生自己的路径，减少训练与实际使用之间的差距。它能提供更密集的学习信号。
+
+**Distribution shift / Exposure Bias: training follows the Teacher's trajectory, while inference follows the Student's own trajectory.** Training continuations use Teacher or reference prefixes. At inference, the Student continues its own output. Deviations can lead to underrepresented states, making recovery difficult and allowing errors to accumulate.
+
+**Confident Conflict: the Student strongly prefers one continuation but is trained to imitate another token.** Repeated conflicting supervision can disturb existing capabilities and increase forgetting. The issue includes confidence in an alternative, rather than a low target probability alone.
+
+The first problem concerns **different visited states**; the second concerns **conflicting choices at a state**. OPD addresses the training–inference gap by having the Teacher guide the Student's own trajectories with denser signals.
 
 ## 2. OPD 怎么训练？
 
@@ -40,6 +58,12 @@ OPD 的思路是：让老师来指导学生自己的路径，减少训练与实�
 
 **On-policy 指的是：练习内容来自学生当前的策略。** Teacher 不必重新生成完整标准答案，也不一定要比 Student 更大，只需在目标能力上提供有效指导。
 
+1. **Student attempts the task.** A generated response is a rollout.
+2. **Teacher guides the trajectory.** Given the Student's prefix, the Teacher provides next-token probabilities or scores.
+3. **Student updates.** Update its parameters, sample new responses, and repeat.
+
+**On-policy means the practice data comes from the Student's current policy.** The Teacher need not generate a complete reference answer or be larger than the Student; it needs to provide useful guidance for the target capability.
+
 ## 3. 两个常见方向：OPSD 与 MOPD
 
 OPD 是整体范式；OPSD 和 MOPD 主要区别在于 **Teacher 从哪里来**。
@@ -50,6 +74,14 @@ OPD 是整体范式；OPSD 和 MOPD 主要区别在于 **Teacher 从哪里来**�
 | OPSD：自我蒸馏 | 同源模型，但 Teacher 额外看到参考解法 | 把“看过解法后”的能力学进模型 |
 | MOPD：多教师蒸馏 | 多个领域老师，如数学、代码、Agent 专家 | 把不同专长融合进一个学生模型 |
 
+OPD is the overall paradigm. OPSD and MOPD mainly differ in **where the Teacher comes from**.
+
+| Direction | Teacher | Purpose |
+| --- | --- | --- |
+| Common OPD | An independent model or an earlier checkpoint | Transfer a target capability |
+| OPSD | A related model given an additional reference solution | Internalize the capability available with the solution |
+| MOPD | Multiple domain Teachers, such as math, code, and Agent experts | Combine their specialties in one Student |
+
 ### OPSD：同一个模型，看到的信息不同
 
 Student 只看问题，Teacher 额外看参考答案或解法。虽然模型同源，输入的信息不同，给出的指导也可以不同。训练后，Student 仍然需要独立回答问题。
@@ -58,11 +90,17 @@ Student 只看问题，Teacher 额外看参考答案或解法。虽然模型同�
 
 参考 [Self-Distilled Reasoner](https://arxiv.org/abs/2601.18734)。
 
+The Student sees only the question; the Teacher additionally sees a reference answer or solution. Related models can give different guidance because their inputs differ. After training, the Student still answers independently.
+
 ### MOPD：多个老师，教同一个学生
 
 数学任务向数学专家学习，代码任务向代码专家学习，最终更新的是同一个 Student。多教师不意味着每个 Token 都要请全部老师来评价。
 
 本文的 MOPD 指 **Multi-Teacher OPD**；另有同名的 Multi-Rollout OPD，阅读论文时注意全称。
+
+Math tasks use a math Teacher, code tasks use a code Teacher, and all updates train the same Student. Multiple Teachers do not require every Teacher to evaluate every token.
+
+Here, MOPD means **Multi-Teacher OPD**. The same abbreviation is also used for Multi-Rollout OPD, so check the expanded name in each paper.
 
 ## 4. 模型案例：恢复旧能力，还是融合新能力？
 
@@ -74,6 +112,14 @@ Student 只看问题，Teacher 额外看参考答案或解法。虽然模型同�
 | [MiMo-V2-Flash](https://arxiv.org/html/2601.02780v2#S4.SS4) | 各领域的专业 Teacher | 融合多个领域的能力 | 老师逐 Token 指导，同时结合最终结果奖励 |
 | [DeepSeek-V4](https://arxiv.org/html/2606.19348v1#S5.SS1.SSS2) | 多个领域专家 | 融合多个领域的能力 | 在学生访问的位置比较完整词表分布 |
 
+Compare the Teacher's origin first, then the guidance signal.
+
+| Model | Teacher origin | Main purpose | Guidance |
+| --- | --- | --- | --- |
+| GLM-5 | Checkpoints from earlier training stages | Restore capabilities lost during sequential training | Token-level guidance from historical Teachers |
+| MiMo-V2-Flash | Specialized domain Teachers | Combine domain capabilities | Token-level guidance combined with outcome rewards |
+| DeepSeek-V4 | Multiple domain experts | Combine domain capabilities | Full-vocabulary comparisons at Student-visited positions |
+
 ### Teacher 的关系不同
 
 **GLM-5：沿训练阶段找老师。** 模型依次学习推理、Agent、通用能力后，部分旧能力可能下降。于是把先前阶段保存的模型当作 Teacher，进行跨阶段蒸馏。
@@ -82,10 +128,17 @@ Student 只看问题，Teacher 额外看参考答案或解法。虽然模型同�
 
 ![历史阶段 Teacher 与领域专家 Teacher 的关系](images/teacher-organization.svg)
 
+**GLM-5 selects Teachers across training stages.** Sequential reasoning, Agent, and general-capability training can weaken earlier skills, so saved checkpoints provide cross-stage distillation.
+
+**MiMo and DeepSeek select Teachers across domains.** Independently specialized experts transfer their skills into one Student. The relationship is domain specialization, rather than a math Teacher subsequently becoming a code Teacher.
+
 ### 指导信号的范围不同
 
 - **Sampled-token：** 用学生实际生成的那个 Token 的概率差异提供指导。GLM、MiMo 的上述方案采用这类信号。
 - **Full-vocabulary：** 在同一位置比较所有候选 Token 的概率分布。DeepSeek-V4 使用这种方式，信息更完整，计算和存储成本也更高。
+
+- **Sampled-token:** guidance uses probability differences for the token actually sampled by the Student. The cited GLM and MiMo approaches use this signal.
+- **Full-vocabulary:** guidance compares all candidate-token probabilities at the same position. DeepSeek-V4 uses this richer signal, with higher computation and storage costs.
 
 #### 用概率分布来理解
 
@@ -98,7 +151,9 @@ Student 只看问题，Teacher 额外看参考答案或解法。虽然模型同�
 
 Full-vocabulary 仍然可以是 on-policy：**回答由学生生成，只是在回答经过的位置比较完整词表，而不是遍历所有可能的回答。**
 
-## 相关笔记
+At one position, suppose the candidates are A, B, and C. The Student assigns **60%, 30%, 10%**, while the Teacher assigns **20%, 70%, 10%**. The Student samples A.
 
-- [PPO 与 GRPO](../rl/ppo-grpo.md)
-- [DeepSeek-R1](../../model-studies/deepseek-r1/deepseek-r1.md)
+- **MiMo focuses on the sampled A.** The Teacher assigns A a lower probability, so the distillation signal discourages the Student's preference for A. B and C do not directly enter this sampled-token signal.
+- **DeepSeek compares the whole distribution.** It sees both the Student's excessive preference for A and the Teacher's stronger preference for B, using all candidate probabilities to guide the update.
+
+Full-vocabulary guidance can still be on-policy: **the Student generates the trajectory, and full distributions are compared at its visited positions.** It does not require enumerating every possible response.

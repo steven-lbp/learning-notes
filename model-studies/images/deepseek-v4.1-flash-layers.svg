@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="650" viewBox="0 0 1060 650" role="img" aria-labelledby="title desc">
+  <title id="title">DeepSeek V4.1 Flash 的 40 层排列</title>
+  <desc id="desc">先执行左列的 20 层 Encoder，再执行右列的 20 层 Decoder；每列自上而下。Encoder 为两层 SWA 和三组 Full 加五层 Reuse。Decoder 为一组 Full 加三层 Reuse，以及四组 Reindex 加三层 Reuse。</desc>
+  <defs>
+    <style>
+      text { font-family: Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; fill: #172b4d; }
+      .heading { font-size: 23px; font-weight: 700; }
+      .label { font-size: 17px; fill: #52627a; }
+      .mode { font-size: 18px; font-weight: 600; text-anchor: middle; }
+      .arrow { font-size: 24px; fill: #7b8ba2; text-anchor: middle; }
+    </style>
+  </defs>
+  <rect width="1060" height="650" fill="#ffffff"/>
+  <text x="32" y="40" font-size="28" font-weight="700">DeepSeek V4.1 Flash：40 层怎么排列</text>
+  <text x="32" y="73" class="label">先执行左列，再执行右列；每列自上而下，每个 Block 都包含 MoE。</text>
+
+  <rect x="24" y="98" width="496" height="478" rx="18" fill="#f4f7fc"/>
+  <rect x="540" y="98" width="496" height="478" rx="18" fill="#f4f7fc"/>
+  <text x="46" y="133" class="heading">① Causal Encoder · 第 1–20 层</text>
+  <text x="562" y="133" class="heading">② Decoder · 第 21–40 层</text>
+
+  <g transform="translate(46,153)">
+    <text x="0" y="32" class="label">第 1–2 层</text>
+    <rect x="130" width="320" height="50" rx="9" fill="#e2e8f0"/>
+    <text x="290" y="32" class="mode">SWA ×2</text>
+  </g>
+  <g transform="translate(46,229)">
+    <text x="0" y="32" class="label">第 3–8 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#cdeedc"/>
+    <text x="186" y="32" class="mode">Full</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×5</text>
+  </g>
+  <g transform="translate(46,305)">
+    <text x="0" y="32" class="label">第 9–14 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#cdeedc"/>
+    <text x="186" y="32" class="mode">Full</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×5</text>
+  </g>
+  <g transform="translate(46,381)">
+    <text x="0" y="32" class="label">第 15–20 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#cdeedc"/>
+    <text x="186" y="32" class="mode">Full</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×5</text>
+  </g>
+  <text x="46" y="478" font-size="18">三组，每组 1 + 5 = 6 层</text>
+  <text x="46" y="545" font-size="21" font-weight="700">2 + 3 × (1 + 5) = 20 层</text>
+
+  <g transform="translate(562,153)">
+    <text x="0" y="32" class="label">第 21–24 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#cdeedc"/>
+    <text x="186" y="32" class="mode">Full</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×3</text>
+  </g>
+  <g transform="translate(562,223)">
+    <text x="0" y="32" class="label">第 25–28 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#ffebc2"/>
+    <text x="186" y="32" class="mode">Reindex</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×3</text>
+  </g>
+  <g transform="translate(562,293)">
+    <text x="0" y="32" class="label">第 29–32 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#ffebc2"/>
+    <text x="186" y="32" class="mode">Reindex</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×3</text>
+  </g>
+  <g transform="translate(562,363)">
+    <text x="0" y="32" class="label">第 33–36 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#ffebc2"/>
+    <text x="186" y="32" class="mode">Reindex</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×3</text>
+  </g>
+  <g transform="translate(562,433)">
+    <text x="0" y="32" class="label">第 37–40 层</text>
+    <rect x="130" width="112" height="50" rx="9" fill="#ffebc2"/>
+    <text x="186" y="32" class="mode">Reindex</text>
+    <text x="261" y="33" class="arrow">→</text>
+    <rect x="280" width="170" height="50" rx="9" fill="#dbe8ff"/>
+    <text x="365" y="32" class="mode">Reuse ×3</text>
+  </g>
+  <text x="562" y="545" font-size="21" font-weight="700">(1 + 3) + 4 × (1 + 3) = 20 层</text>
+  <text x="32" y="617" font-size="17" fill="#52627a">×N 表示连续的 N 个独立 Block；Full / Reindex / Reuse 描述全局 KV 和索引的处理方式。</text>
+</svg>

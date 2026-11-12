@@ -1,40 +1,79 @@
-# Deepspeed
-## Why do we need deepspeed
-- ZeRO: a kind of data Parallel
+# DeepSpeed
 
-ZeRO can reduce memory usage, optimize large model training, and divide model parameters into three parts: Optimizer States, Gradient, and Model Parameters
+## Why DeepSpeed
 
-- Mixed precision training
-- Deepspeed supports larger scale model training
+DeepSpeed 通过 ZeRO、Mixed Precision、Offload 等机制降低大模型训练的显存需求，并支持更大规模的分布式训练。
 
-## Communication strategy
-``MPI`` is a cross node communication library commonly used for distributed training on CPU clusters;
+DeepSpeed reduces large-model training memory requirements through ZeRO, Mixed Precision, and Offload, supporting larger distributed training workloads.
 
-``Gloo`` is a high-performance distributed training framework that supports distributed training on both CPU and GPU;
+## Communication backends
 
-``NCCL`` is a GPU specific communication library provided by NVIDIA, widely used for distributed training on GPUs.
-## Zero Redundancy Optimizer
-ZeRO divides model parameters into three parts: Optimizer States, Gradient, and Model Parameters
-- ``Optimizer States`` are the data that Optimizer needs to use for gradient updates, such as Momentum in SGD.
-- ``Gradient`` is the gradient information generated after backpropagation, which determines the direction of parameter updates.
-- ``Model parameters`` refer to the information we 'learn' from data throughout the entire process.
+- **MPI：** 常见于跨节点分布式计算和 CPU 集群。
+- **Gloo：** 常用于 CPU Tensor 的分布式通信。
+- **NCCL：** NVIDIA 面向 GPU 的高性能集合通信库。
 
-``ZeRO-0``: Disable all types of shards and only use DeepSpeed as DDP (Distributed Data Parallel)
+- **MPI:** commonly used for distributed computation across nodes and CPU clusters.
+- **Gloo:** commonly used for distributed communication involving CPU tensors.
+- **NCCL:** NVIDIA's high-performance collective communication library for GPUs.
 
-``ZeRO-1``: Splitting ``Optimizer States`` reduces memory by 4 times, with the same communication capacity and data parallelism
+## ZeRO
 
-``ZeRO-2``: Split ``Optimizer States`` and ``Gradients``, reduce memory by 8x, with the same communication capacity and data parallelism
+普通 DP 会在各副本中重复存储模型状态。ZeRO 按阶段将这些状态分片：
 
-``ZeRO-3``: Splitting ``Optimizer States``, ``Gradients``, and ``Parameters``, memory reduction is linearly related to data parallelism and complexity
+| 状态 | 含义 |
+| --- | --- |
+| Optimizer States | Optimizer 更新所需的动量、二阶统计等信息 |
+| Gradients | 反向传播得到的参数梯度 |
+| Parameters | 模型学习到的权重 |
 
-## Mixed precision training
-Due to the low accuracy of FP16, there may be issues with gradient vanishing and model instability during the training process.
+| 阶段 | 分片内容 |
+| --- | --- |
+| ZeRO-0 | 不分片，使用普通 DP |
+| ZeRO-1 | Optimizer States |
+| ZeRO-2 | Optimizer States + Gradients |
+| ZeRO-3 | Optimizer States + Gradients + Parameters |
 
-``"fp16.enabled": true``: During the training process, DeepSpeed will automatically convert some operations to FP16 format and dynamically adjust the accuracy scaling factor as needed to ensure the stability and accuracy of the training.
+显存节省随 DP 规模、状态精度和分片阶段变化。Offload 还可以将部分状态移到 CPU 或 NVMe。
 
-``"bf16.enabled": true``: BF16 can serve as a more accurate alternative for some critical computational operations, such as gradient accumulation and weight updates
+Ordinary DP replicates model states across workers. ZeRO progressively partitions them:
+
+| State | Meaning |
+| --- | --- |
+| Optimizer States | Momentum, second moments, and other state required for updates |
+| Gradients | Parameter gradients produced by backpropagation |
+| Parameters | The model's learned weights |
+
+| Stage | Sharded states |
+| --- | --- |
+| ZeRO-0 | None; ordinary DP |
+| ZeRO-1 | Optimizer States |
+| ZeRO-2 | Optimizer States + Gradients |
+| ZeRO-3 | Optimizer States + Gradients + Parameters |
+
+Memory savings depend on the DP degree, state precision, and sharding stage. Offload can additionally move states to CPU or NVMe.
+
+[DeepSpeed ZeRO tutorial](https://www.deepspeed.ai/tutorials/zero/)
+
+## Mixed Precision
+
+FP16 可以减少显存与计算开销，但其数值范围较小，训练中常配合 Loss Scaling，减少梯度下溢。配置 `fp16.enabled` 可以启用 FP16 训练。
+
+BF16 的数值范围更大，通常不需要 Loss Scaling；配置 `bf16.enabled` 启用。不同训练模式中，梯度累积和 Optimizer 状态还可以使用更高精度。
+
+FP16 reduces memory and compute costs, but its limited numerical range often requires Loss Scaling to reduce gradient underflow. Enable it through `fp16.enabled`.
+
+BF16 has a wider numerical range and usually does not require Loss Scaling; enable it through `bf16.enabled`. Gradient accumulation and optimizer states can use higher precision depending on the training setup.
+
+[DeepSpeed precision configuration](https://www.deepspeed.ai/docs/config-json/)
+
 ## Example code
-- ds_zero2_config.json
+
+### ds_zero2_config.json
+
+下面的配置使用 ZeRO-2，将 Optimizer States Offload 到 CPU，并启用 FP16 与 Activation Checkpointing。
+
+The configuration below uses ZeRO-2, offloads Optimizer States to CPU, and enables FP16 and Activation Checkpointing.
+
 ```
 {
   "train_micro_batch_size_per_gpu": "auto",
@@ -74,7 +113,13 @@ Due to the low accuracy of FP16, there may be issues with gradient vanishing and
   "wall_clock_breakdown": false
 }
 ```
-- train.py
+
+### train.py
+
+示例依次完成数据 Tokenization、模型加载、LoRA 配置和 Trainer 训练。`train_on_inputs=False` 时，输入 Prompt 对应的 Label 设为 −100，只监督 Response 部分。
+
+The example tokenizes data, loads the model, configures LoRA, and trains with Trainer. When `train_on_inputs=False`, prompt labels are set to −100 so only the response contributes to the supervised objective.
+
 ```
 import os
 import torch
@@ -98,7 +143,7 @@ from peft import (
     get_peft_model_state_dict,
     set_peft_model_state_dict
 )
- 
+
 #--------------------- 1. Set the argument ---------------------#
 # LoRA argument
 LORA_R = 8  # rank, higher rank, higher information, higher cache consumption
@@ -109,7 +154,7 @@ LORA_DROPOUT = 0.1  # Prevent overfitting
 EPOCHS = 3
 LEARNING_RATE = 5e-5
 OUTPUT_DIR = "./checkpoints"
-BATCH_SIZE = 4 
+BATCH_SIZE = 4
 GRADIENT_ACCUMULATION_STEPS=3  # effective_batch_size = BATCH_SIZE * GRAD_ACCUMULATION
 
 # other argument
@@ -121,8 +166,8 @@ DeepSpeed_CONFIG = "ds_zero2_config.json"
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
 dataset = datasets.load_dataset("json", data_files=DATA_PATH)
- 
- 
+
+
 #--------------------- 2. tokenize ---------------------#
 def tokenize(text: str, add_eos_token=True):
     result = tokenizer(
@@ -139,8 +184,8 @@ def tokenize(text: str, add_eos_token=True):
         result["attention_mask"].append(1)
     result["labels"] = result["input_ids"].copy()
     return result
- 
- 
+
+
 def preprocess(example: Dict, train_on_inputs: bool = False):
     prompt = example["input"]
     response = example["target"]
@@ -152,20 +197,20 @@ def preprocess(example: Dict, train_on_inputs: bool = False):
         prompt_tokens_len = len(tokenized_prompt["input_ids"])
         tokenized_inp["labels"] = [-100]*prompt_tokens_len + tokenized_inp["labels"][prompt_tokens_len:]
     return tokenized_inp
- 
- 
+
+
 train_data = dataset["train"].shuffle().map(preprocess, remove_columns=["id", "input", "target"])
 print(train_data[0])
- 
+
 # pad_to_multiple_of=8表示padding的长度是8的倍数
 collate_fn = DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8, return_tensors="pt", padding=True)
- 
+
 #--------------------- 3. load the model ---------------------#
 device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
 # device_map指定模型加载的GPU;troch_dtype=torch.float16表示半精度加载模型
 model = AutoModelForCausalLM.from_pretrained(MODEL_PATH, torch_dtype=torch.float16, device_map=device_map)
- 
- 
+
+
 #--------------------- 4. LoRA ---------------------#
 lora_config = LoraConfig(
     task_type=TaskType.CAUSAL_LM,
@@ -183,13 +228,13 @@ model.state_dict = (
 ).__get__(model, type(model))
 # 打印模型中的可训练参数
 model.print_trainable_parameters()
- 
- 
+
+
 #--------------------- 5. training arg ---------------------#
 args = TrainingArguments(
     output_dir=OUTPUT_DIR, # checkpoint的存储目录
-    per_device_train_batch_size=BATCH_SIZE, 
-    gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS, 
+    per_device_train_batch_size=BATCH_SIZE,
+    gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
     warmup_steps=100,
     num_train_epochs=EPOCHS,
     learning_rate=LEARNING_RATE,
@@ -201,8 +246,8 @@ args = TrainingArguments(
     save_total_limit=5, # 最多保存5个checkpoint
     deepspeed=DS_CONFIG
 )
- 
- 
+
+
 #--------------------- 6. training the model ---------------------#
 trainer = Trainer(
     model=model,
