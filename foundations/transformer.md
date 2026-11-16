@@ -379,6 +379,16 @@ The following uses one DeepSeek-V3 layer and one sample, with row vectors: `outp
 
 ### 6.2 一个 Token 如何生成 Q 和 KV
 
+先沿图中的 Q、共享 KV 内容、位置 Key 三条分支读一遍：绿色框是模型权重，蓝色框是计算张量，橙色框及虚线箭头标出实际写入紧凑缓存的内容。下半部分接上历史读取和输出投影。
+
+Follow the query, shared KV-content, and positional-key branches first. Green boxes contain model weights, blue boxes contain computation tensors, and orange boxes with dashed arrows identify compact-cache writes. The lower half follows history reads through Attention to the output projection.
+
+![DeepSeek-V3 MLA 全流程：各步维度、模型权重、临时张量与 KV Cache](images/deepseek-v3-mla-flow.svg)
+
+图中将融合投影拆开画以便区分用途。参考实现的 `wkv_a: 7168 → 576` 一次生成内容 latent 512 维与位置分量 64 维；`wkv_b: 512 → 32768` 一次生成 `128 × (K 内容 128 + V 128)`。RMSNorm 中的 γ 是模型权重，归一化后的 latent 才是每个 Token 的数据。图中的 K/V 为结构展开视图；直接使用紧凑缓存的计算见 [6.5](#65-如何直接使用压缩缓存)。
+
+The diagram separates fused projections by purpose. In the reference implementation, `wkv_a: 7168 → 576` produces the 512-dimensional content latent and 64-dimensional position component together; `wkv_b: 512 → 32768` produces `128 × (128 content-key + 128 value)` dimensions. RMSNorm's γ is a model weight; the normalized latent is token-specific data. K/V are shown conceptually expanded; [Section 6.5](#65-如何直接使用压缩缓存) explains direct computation with the compact cache. [Official MLA implementation](https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py)
+
 #### 6.2.1 先固定各个维度的含义
 
 输入 Hidden State 的宽度、低秩中间维度和每头维度分别描述不同对象。DeepSeek-V3 使用下面的配置；其中 1536 和 512 是架构选定的中间维度，不能只靠 hidden size 或 head 数唯一推导出来。
@@ -413,12 +423,6 @@ Two different up-projections generate content K and V. Each complete result cont
 ```math
 K_t^C=c_t^{KV}W_{UK},\qquad V_t=c_t^{KV}W_{UV},\qquad
 W_{UK},W_{UV}\in\mathbb{R}^{512\times16384}
-```
-
-```text
-x_t [7168] → down-projection + RMSNorm → c_t^KV [512]
-                                          ├→ W_UK → K content [128, 128]
-                                          └→ W_UV → V         [128, 128]
 ```
 
 这里的“升维”是生成各 head 所需的特征，不是把原始 7168 维输入无损还原。模型在训练时就使用这套低秩结构，学习怎样把有用信息放进共享表示。

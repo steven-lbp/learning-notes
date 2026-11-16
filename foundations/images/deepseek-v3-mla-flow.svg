@@ -1,0 +1,178 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1904" viewBox="0 0 1200 1904" role="img" aria-labelledby="title desc">
+  <title id="title">DeepSeek-V3 MLA：维度、模型权重与 KV Cache 全流程</title>
+  <desc id="desc">一个 Token 在单层 MLA 中的计算。绿色是按层复用的模型权重，蓝色是计算张量，橙色是按 Token 保存的紧凑缓存。输入 7168 维，Q 经 1536 维 latent 生成 128 个 192 维 Query；KV 内容 latent 为 512 维，另有共享的 64 维 RoPE Key。每个 Token 每层仅缓存这 576 个数。各 head 的内容 K、V 分别由不同权重投影生成。下半部分展示展开后的 Attention 计算和 16384 到 7168 维的输出投影；实际 absorb 路径直接使用紧凑缓存。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 Z" fill="#64748b"/></marker>
+    <marker id="cache-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 Z" fill="#c66b12"/></marker>
+    <style>
+      text{font-family:Arial,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#172b43}
+      .title{font-size:34px;font-weight:700}
+      .subtitle{font-size:20px;fill:#53657a}
+      .legend{font-size:20px;font-weight:600}
+      .lane-label{font-size:23px;font-weight:700;text-anchor:middle}
+      .label{font-size:22px;text-anchor:middle}
+      .shape{font-size:26px;font-weight:700;text-anchor:middle}
+      .small{font-size:19px;text-anchor:middle;fill:#53657a}
+      .op{font-size:19px;text-anchor:middle;fill:#53657a}
+      .section{font-size:28px;font-weight:700}
+      .weight{fill:#edf9f1;stroke:#62ad7b;stroke-width:2}
+      .activation{fill:#edf5ff;stroke:#79a5dd;stroke-width:2}
+      .cache{fill:#fff3e3;stroke:#df9a47;stroke-width:2}
+      .operation{fill:#f1f4f8;stroke:#ccd5df;stroke-width:1.5}
+      .flow{fill:none;stroke:#64748b;stroke-width:2.5;marker-end:url(#arrow)}
+      .store{fill:none;stroke:#c66b12;stroke-width:3;stroke-dasharray:8 6;marker-end:url(#cache-arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="1904" fill="#ffffff"/>
+
+  <text x="44" y="52" class="title">DeepSeek-V3 · 一个 Token 的 MLA 全流程</text>
+  <text x="44" y="88" class="subtitle">单层 · 单样本 · 128 个 Q heads · 权重 shape 使用行向量约定：输出 = 输入 @ W</text>
+
+  <rect x="44" y="112" width="354" height="44" rx="10" class="weight"/>
+  <text x="60" y="140" class="legend">模型权重：本层所有 Token 复用</text>
+  <rect x="414" y="112" width="328" height="44" rx="10" class="activation"/>
+  <text x="430" y="140" class="legend">计算张量：用于当前前向计算</text>
+  <rect x="758" y="112" width="398" height="44" rx="10" class="cache"/>
+  <text x="774" y="140" class="legend">KV Cache：按历史 Token 逐条保存</text>
+
+  <rect x="400" y="180" width="400" height="90" rx="16" class="activation"/>
+  <text x="600" y="216" class="label">当前 Token 的层输入 x_t</text>
+  <text x="600" y="252" class="shape">[7168]</text>
+
+  <rect x="44" y="308" width="336" height="700" rx="18" fill="#fafcff" stroke="#e1e7ef"/>
+  <rect x="432" y="308" width="336" height="700" rx="18" fill="#fafcff" stroke="#e1e7ef"/>
+  <rect x="820" y="308" width="336" height="700" rx="18" fill="#fafcff" stroke="#e1e7ef"/>
+
+  <path class="flow" d="M600 270 V290 H212 V352"/>
+  <path class="flow" d="M600 290 V352"/>
+  <path class="flow" d="M600 290 H988 V352"/>
+
+  <rect x="104" y="310" width="216" height="32" fill="#fafcff"/>
+  <text x="212" y="334" class="lane-label">① Q 查询分支</text>
+  <rect x="466" y="310" width="268" height="32" fill="#fafcff"/>
+  <text x="600" y="334" class="lane-label">② 共享 KV 内容分支</text>
+  <rect x="870" y="310" width="236" height="32" fill="#fafcff"/>
+  <text x="988" y="334" class="lane-label">③ 位置 Key 分支</text>
+
+  <!-- Query path -->
+  <rect x="64" y="352" width="296" height="84" rx="12" class="weight"/>
+  <text x="212" y="384" class="label">W_DQ</text>
+  <text x="212" y="420" class="shape">[7168 × 1536]</text>
+  <path class="flow" d="M212 436 V456"/>
+  <rect x="56" y="456" width="312" height="50" rx="10" class="operation"/>
+  <text x="212" y="488" class="op">RMSNorm · <tspan fill="#267147">γ_Q [1536]</tspan></text>
+  <path class="flow" d="M212 506 V528"/>
+  <rect x="64" y="528" width="296" height="74" rx="12" class="activation"/>
+  <text x="212" y="559" class="label">Q latent</text>
+  <text x="212" y="589" class="shape">[1536]</text>
+  <path class="flow" d="M212 602 V644"/>
+  <rect x="64" y="644" width="296" height="84" rx="12" class="weight"/>
+  <text x="212" y="676" class="label">W_UQ</text>
+  <text x="212" y="712" class="shape">[1536 × 24576]</text>
+  <path class="flow" d="M212 728 V752"/>
+  <rect x="56" y="752" width="312" height="64" rx="10" class="operation"/>
+  <text x="212" y="779" class="op">24576 → 128 × 192（分头）</text>
+  <text x="212" y="804" class="op">每头后 64 维应用 RoPE</text>
+  <path class="flow" d="M212 816 V844"/>
+  <rect x="56" y="844" width="312" height="144" rx="12" class="activation"/>
+  <text x="212" y="879" class="shape">Q [128,192]</text>
+  <text x="212" y="914" class="label">内容 Q [128,128]</text>
+  <text x="212" y="945" class="label">位置 Q [128,64]</text>
+  <text x="212" y="974" class="small">各 head 的 Q 不同</text>
+
+  <!-- Shared KV content path -->
+  <rect x="452" y="352" width="296" height="84" rx="12" class="weight"/>
+  <text x="600" y="384" class="label">W_DKV</text>
+  <text x="600" y="420" class="shape">[7168 × 512]</text>
+  <path class="flow" d="M600 436 V456"/>
+  <rect x="444" y="456" width="312" height="50" rx="10" class="operation"/>
+  <text x="600" y="488" class="op">RMSNorm · <tspan fill="#267147">γ_KV [512]</tspan></text>
+  <path class="flow" d="M600 506 V528"/>
+  <rect x="452" y="528" width="296" height="74" rx="12" class="cache"/>
+  <text x="600" y="559" class="label">归一化后的 KV latent</text>
+  <text x="600" y="589" class="shape">c_KV [512]</text>
+  <path class="flow" d="M600 602 V644"/>
+  <rect x="444" y="644" width="312" height="108" rx="12" class="weight"/>
+  <text x="600" y="676" class="label">W_UK [512 × 16384]</text>
+  <text x="600" y="709" class="label">W_UV [512 × 16384]</text>
+  <text x="600" y="738" class="small">两个矩阵，各含 128 个 head 分块</text>
+  <path class="flow" d="M600 752 V776"/>
+  <rect x="444" y="776" width="312" height="40" rx="10" class="operation"/>
+  <text x="600" y="803" class="op">每组 16384 → 128 × 128</text>
+  <path class="flow" d="M600 816 V844"/>
+  <rect x="444" y="844" width="312" height="144" rx="12" class="activation"/>
+  <text x="600" y="879" class="label">K 内容 [128,128]</text>
+  <text x="600" y="917" class="shape">V [128,128]</text>
+  <text x="600" y="949" class="small">每个 head 各 128 维</text>
+  <text x="600" y="976" class="small">不同 head 使用不同投影</text>
+
+  <!-- Shared positional key path -->
+  <rect x="840" y="352" width="296" height="84" rx="12" class="weight"/>
+  <text x="988" y="384" class="label">W_KR</text>
+  <text x="988" y="420" class="shape">[7168 × 64]</text>
+  <path class="flow" d="M988 436 V468"/>
+  <rect x="840" y="468" width="296" height="74" rx="12" class="activation"/>
+  <text x="988" y="499" class="label">位置分支投影结果</text>
+  <text x="988" y="529" class="shape">[64]</text>
+  <path class="flow" d="M988 542 V592"/>
+  <rect x="840" y="592" width="296" height="50" rx="10" class="operation"/>
+  <text x="988" y="624" class="op">按当前位置应用 RoPE</text>
+  <path class="flow" d="M988 642 V704"/>
+  <rect x="840" y="704" width="296" height="110" rx="12" class="cache"/>
+  <text x="988" y="744" class="shape">k_R [64]</text>
+  <text x="988" y="780" class="label">全部 128 个 head 共享一份</text>
+  <path class="flow" d="M988 814 V844"/>
+  <path class="flow" d="M756 879 H828"/>
+  <text x="792" y="866" class="small">拼接</text>
+  <rect x="828" y="844" width="320" height="144" rx="12" class="activation"/>
+  <text x="988" y="887" class="shape">完整 K [128,192]</text>
+  <text x="988" y="927" class="label">每头：内容 128 + 位置 64</text>
+  <text x="988" y="965" class="small">只共享位置部分，内容部分不同</text>
+
+  <!-- Storage routes branch from normalized latent / rotated key -->
+  <path class="store" d="M452 565 H406 V1018 H520 V1040"/>
+  <path class="store" d="M1136 759 H1178 V1018 H1060 V1040"/>
+  <rect x="44" y="1040" width="336" height="160" rx="14" fill="#f8fafc" stroke="#d6dfe9" stroke-dasharray="6 5"/>
+  <text x="212" y="1081" class="label">Q 不写历史 KV Cache</text>
+  <text x="212" y="1117" class="small">W 和 γ 是模型参数</text>
+  <text x="212" y="1148" class="small">按层复用，不随 Token 复制</text>
+  <text x="212" y="1179" class="small">RoPE、reshape / split 是运算</text>
+  <rect x="432" y="1040" width="724" height="160" rx="14" class="cache"/>
+  <text x="794" y="1073" class="label">写入本层 KV Cache · 每个 Token 追加一份</text>
+  <text x="794" y="1110" class="shape">c_KV [512] + k_R [64] = 576 个数</text>
+  <text x="794" y="1147" class="label">保留 T 个位置：[T,512] + [T,64]</text>
+  <text x="794" y="1178" class="small">以 BF16 为例：576 × 2 字节 = 1152 字节 / Token / 层</text>
+
+  <text x="44" y="1250" class="section">④ 读取历史 → 匹配 → 加权 V → 输出</text>
+  <text x="44" y="1284" class="subtitle">下方按一个 head 展开理解计算；T 包含历史位置和刚写入的当前 Token。</text>
+
+  <rect x="44" y="1312" width="1112" height="92" rx="14" class="activation"/>
+  <text x="600" y="1353" class="shape">Q [192] @ Kᵀ [192,T] → 分数 [T]</text>
+  <text x="600" y="1386" class="small">每个完整 Q/K：内容 128 维 + 位置 64 维；历史 K 为 [T,192]</text>
+  <path class="flow" d="M600 1404 V1432"/>
+  <rect x="44" y="1432" width="1112" height="74" rx="14" class="activation"/>
+  <text x="600" y="1463" class="shape">按配置缩放 + Mask + softmax → Attention 权重 [T]</text>
+  <text x="600" y="1491" class="small">这里的 Attention 权重是本次计算结果，不是可学习的模型参数</text>
+  <path class="flow" d="M600 1506 V1534"/>
+  <rect x="44" y="1534" width="1112" height="84" rx="14" class="activation"/>
+  <text x="600" y="1570" class="shape">权重 [T] @ V [T,128] → 当前 head 输出 [128]</text>
+  <text x="600" y="1601" class="small">128 个 head 各自计算自己的 Attention 权重和输出</text>
+  <path class="flow" d="M600 1618 V1636 H204 V1652"/>
+
+  <rect x="44" y="1652" width="320" height="102" rx="14" class="activation"/>
+  <text x="204" y="1688" class="label">拼接 128 个 head 的输出</text>
+  <text x="204" y="1725" class="shape">[128,128] → [16384]</text>
+  <path class="flow" d="M364 1703 H420"/>
+  <rect x="420" y="1652" width="352" height="102" rx="14" class="weight"/>
+  <text x="596" y="1688" class="label">W_O · 输出投影权重</text>
+  <text x="596" y="1725" class="shape">[16384 × 7168]</text>
+  <path class="flow" d="M772 1703 H828"/>
+  <rect x="828" y="1652" width="328" height="102" rx="14" class="activation"/>
+  <text x="992" y="1688" class="label">Attention 输出 y_t</text>
+  <text x="992" y="1725" class="shape">[7168]</text>
+
+  <line x1="44" y1="1784" x2="1156" y2="1784" stroke="#dce3eb"/>
+  <text x="44" y="1820" font-size="22" font-weight="700">记住：576 是每个 Token 跨全部 head 共享的缓存宽度，不是每个 head 各存 576。</text>
+  <text x="44" y="1854" class="subtitle">图中展开 K/V 用于理解结构；实际 absorb 路径直接使用紧凑缓存，</text>
+  <text x="44" y="1884" class="subtitle">无需展开全部历史 K/V（见 6.5）。RMSNorm 中的 γ 也属于可学习的模型权重。</text>
+</svg>
