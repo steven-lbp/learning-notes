@@ -57,9 +57,9 @@ First fix one sample and one head: **project QKV → compute dot products → sc
 
 The same input X passes through three learned linear projections to produce Q, K, and V. The equations use row vectors and omit biases.
 
-$$
+```math
 Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V
-$$
+```
 
 | 张量 / Tensor | 作用 / Role |
 | --- | --- |
@@ -98,10 +98,10 @@ K₃ = [1, 0]     q · K₃ = 1×1 + 0×0 = 1
 
 **Softmax:** Normalize across visible keys for the same query, producing weights that sum to 1. Here they are approximately `[0.401, 0.198, 0.401]`. Softmax operates over key positions, not independently on each scalar score.
 
-$$
+```math
 a_j=\frac{\exp(s_j)}{\sum_{\ell}\exp(s_\ell)},\qquad
 s_j=\frac{q\cdot k_j}{\sqrt{d_k}}+m_j
-$$
+```
 
 ### 2.4 权重如何变成输出？
 
@@ -126,10 +126,10 @@ The two output components are `0.401×1 + 0.198×0 + 0.401×1` and `0.401×2 + 0
 
 Stack queries as rows of Q to compute all query-key relationships together. **Rows index query positions, and columns index key positions** in both the score and weight matrices. Softmax operates along each row. M is zero for visible positions and negative infinity for blocked positions.
 
-$$
-A=\operatorname{softmax}\left(\frac{QK^T}{\sqrt{d_k}}+M\right),\qquad
+```math
+A=\mathrm{softmax}\left(\frac{QK^T}{\sqrt{d_k}}+M\right),\qquad
 O=AV
-$$
+```
 
 [Attention Is All You Need, §3.2](https://arxiv.org/html/1706.03762v7#S3.SS2)
 
@@ -166,12 +166,12 @@ Continue with five tokens and omit the batch dimension for now. Each head indepe
 
 For one head, Q, K, and V each have shape `[5, 64]`. QKᵀ sums over the 64 features to produce `5 × 5` position scores. Multiplying A by V sums over the five key positions to produce a 64-dimensional output for each query.
 
-$$
+```math
 \underbrace{Q}_{5\times64}\underbrace{K^T}_{64\times5}
 =\underbrace{S}_{5\times5},\qquad
 \underbrace{A}_{5\times5}\underbrace{V}_{5\times64}
 =\underbrace{O}_{5\times64}
-$$
+```
 
 拼接不会把不同 Token 混在一起：每个 Token 收集自己的 8 个 head 输出，得到 `8 × 64 = 512` 维。W_O 在这些特征之间做线性变换，并输出与残差分支匹配的宽度。
 
@@ -241,10 +241,10 @@ Each layer computes Q/K/V only for the new token. Its new Q reads that layer's p
 
 With t visible positions, one head's Decode attention has these shapes:
 
-$$
+```math
 [1,d_k]\times[d_k,t]\rightarrow[1,t],\qquad
 [1,t]\times[t,d_v]\rightarrow[1,d_v]
-$$
+```
 
 KV Cache 避免重新运行历史 Token；Full Attention 中，新 Q 仍然需要读取所有可见 KV，因此上下文越长，读取缓存的开销仍然越大。
 
@@ -401,19 +401,19 @@ Hidden-state width, latent dimensions, and per-head dimensions describe differen
 
 The current token's input `x_t: [7168]` passes through a down-projection and RMSNorm to produce `c_t^KV: [512]`. Each token has its own latent, shared across all heads when producing content keys and values.
 
-$$
-c_t^{KV}=\operatorname{RMSNorm}(x_tW_{DKV}),\qquad
+```math
+c_t^{KV}=\mathrm{RMSNorm}(x_tW_{DKV}),\qquad
 W_{DKV}\in\mathbb{R}^{7168\times512}
-$$
+```
 
 两个不同的升维投影分别生成内容 K 和 V。完整结果各有 `128 × 128 = 16384` 个数，可以拆成 128 个 head，每头 128 维。
 
 Two different up-projections generate content K and V. Each complete result contains `128 × 128 = 16384` values, split into 128 heads of 128 dimensions.
 
-$$
+```math
 K_t^C=c_t^{KV}W_{UK},\qquad V_t=c_t^{KV}W_{UV},\qquad
 W_{UK},W_{UV}\in\mathbb{R}^{512\times16384}
-$$
+```
 
 ```text
 x_t [7168] → down-projection + RMSNorm → c_t^KV [512]
@@ -435,10 +435,20 @@ Split W_UK into output-column blocks. Head i uses its own `W_UK^(i): [512, 128]`
 
 For a two-dimensional example, the same `c = [2, 3]` can produce `[2, 3]` and `[5, -1]` through different projections.
 
-$$
-[2,3]\begin{bmatrix}1&0\\0&1\end{bmatrix}=[2,3],\qquad
-[2,3]\begin{bmatrix}1&1\\1&-1\end{bmatrix}=[5,-1]
-$$
+```math
+[2,3]
+\begin{bmatrix}
+1 & 0 \\
+0 & 1
+\end{bmatrix}
+=[2,3],\qquad
+[2,3]
+\begin{bmatrix}
+1 & 1 \\
+1 & -1
+\end{bmatrix}
+=[5,-1]
+```
 
 **MLA 共享每个 Token 的低维表示，各个 head 保留不同的投影和 Attention 权重。** 投影矩阵是该层的模型参数，所有 Token 共用；缓存只需保存各 Token 的潜在表示，不需要为每个 Token 再存一份矩阵。
 
@@ -450,11 +460,11 @@ $$
 
 A separate branch projects x_t to 64 dimensions and applies RoPE at position t, producing `k_t^R: [64]`. This positional key is shared across all 128 heads. Each complete key concatenates its head-specific 128-dimensional content with this shared 64-dimensional position component.
 
-$$
-k_t^R=\operatorname{RoPE}_t(x_tW_{KR}),\qquad
+```math
+k_t^R=\mathrm{RoPE}_t(x_tW_{KR}),\qquad
 W_{KR}\in\mathbb{R}^{7168\times64},\qquad
 k_{t,i}=[k_{t,i}^C;k_t^R]\in\mathbb{R}^{192}
-$$
+```
 
 因此，一个 Token 写入紧凑缓存的内容是 **`c_t^KV [512] + k_t^R [64]`**。64 维位置 Key 只保存一份，内容 K/V 通过共享 latent 表示。
 
@@ -470,16 +480,16 @@ The query path uses `7168 → 1536 → 24576`, then splits into 128 heads of 192
 
 Both the 1536-dimensional query latent and the final 24576-dimensional query serve the current computation and are normally not retained in the history KV cache.
 
-$$
-c_t^Q=\operatorname{RMSNorm}(x_tW_{DQ}),\qquad
-Q_t=\operatorname{reshape}(c_t^QW_{UQ},[128,192])
-$$
+```math
+c_t^Q=\mathrm{RMSNorm}(x_tW_{DQ}),\qquad
+Q_t=\mathrm{reshape}(c_t^QW_{UQ},[128,192])
+```
 
-$$
+```math
 W_{DQ}\in\mathbb{R}^{7168\times1536},\qquad
 W_{UQ}\in\mathbb{R}^{1536\times24576},\qquad
 q_{t,i}=[q_{t,i}^C;q_{t,i}^R]
-$$
+```
 
 ### 6.3 展开后如何计算 Attention
 
@@ -489,10 +499,10 @@ $$
 
 Consider the conceptually expanded K/V first. For head i of the current token t, add content and positional scores, apply scaling, and normalize over visible key positions j. Visible positions include the current token's own K/V.
 
-$$
+```math
 s_{t,j,i}=\alpha\left[q_{t,i}^C(k_{j,i}^C)^T+q_{t,i}^R(k_j^R)^T\right]+M_{t,j},\qquad
-a_{t,j,i}=\operatorname{softmax}_{j}(s_{t,j,i})
-$$
+a_{t,j,i}=\mathrm{softmax}_{j}(s_{t,j,i})
+```
 
 基础缩放为 `α = 1/√192`，对应每头 Q/K 的 `128 + 64` 维；具体实现可按长上下文 RoPE 方案调整该系数。Mask 在可见位置为 0，不可见位置为负无穷。
 
@@ -504,11 +514,11 @@ The base scale is `α = 1/√192`, matching the `128 + 64` dimensions per Q/K he
 
 Each head combines 128-dimensional values using its own weights, producing a 128-dimensional output. Concatenating 128 heads yields 16384 dimensions; W_O maps that back to 7168 for the residual connection and subsequent layers.
 
-$$
+```math
 o_{t,i}=\sum_{j\leq t}a_{t,j,i}v_{j,i}\in\mathbb{R}^{128},\qquad
 y_t=[o_{t,1};\ldots;o_{t,128}]W_O,\qquad
 W_O\in\mathbb{R}^{16384\times7168}
-$$
+```
 
 `24576 = 128 × 192` 是 Q/K 的展开宽度，`16384 = 128 × 128` 是各 head 输出的拼接宽度，`576 = 512 + 64` 是每个历史位置的紧凑缓存宽度。
 
@@ -545,10 +555,10 @@ A direct projection from m to n dimensions has `m × n` linear weights. Factorin
 
 Input and output widths determine compatibility with subsequent operations; r controls the capacity of the shared intermediate. A wide output does not require a single equally large direct projection.
 
-$$
+```math
 P_{direct}=mn,\qquad P_{latent}=r(m+n),\qquad
-P_{latent}<P_{direct}\ \text{when}\ r<\frac{mn}{m+n}
-$$
+P_{latent}\lt P_{direct}\ \text{when}\ r\lt \frac{mn}{m+n}
+```
 
 #### 6.4.2 Q 与 KV 内容投影的参数量
 
@@ -575,9 +585,9 @@ For example, `[a, b]` can map to `[a, b, a+b, a-b, 2a, 3b]`. Six outputs still d
 
 Ignoring intermediate RMSNorm, the two linear projections form an effective matrix whose rank is at most r. A smaller r constrains expressiveness, so low-rank projection is not a lossless equivalent of every direct projection. Actual Q/KV paths include RMSNorm after the latent; the full path is not one fixed linear matrix, although it still has a low-dimensional bottleneck.
 
-$$
-W_{effective}=W_DW_U,\qquad \operatorname{rank}(W_{effective})\leq r
-$$
+```math
+W_{effective}=W_DW_U,\qquad \mathrm{rank}(W_{effective})\leq r
+```
 
 #### 6.4.4 Q 与 KV 低秩设计的收益不同
 
@@ -599,19 +609,19 @@ Both paths reduce the projection parameters and multiply-accumulate counts above
 
 Re-expanding every historical latent at every step would preserve compact storage but introduce temporary tensors and repeated projections. Content-key generation is linear, so associativity can move its projection from historical keys to the current query.
 
-$$
+```math
 k_{j,i}^C=c_j^{KV}W_{UK}^{(i)},\qquad W_{UK}^{(i)}\in\mathbb{R}^{512\times128}
-$$
+```
 
-$$
+```math
 q_{t,i}^C(k_{j,i}^C)^T
 =q_{t,i}^C(W_{UK}^{(i)})^T(c_j^{KV})^T
 =\widetilde q_{t,i}(c_j^{KV})^T
-$$
+```
 
-$$
+```math
 \widetilde q_{t,i}=q_{t,i}^C(W_{UK}^{(i)})^T\in\mathbb{R}^{512}
-$$
+```
 
 对每个 head，当前内容 Query 从 128 维变成 512 维，随后直接与缓存的 `[T, 512]` latent 匹配。历史内容 K 无需先展开为 `[T, 128]`。每个 head 的变换和匹配权重仍各不相同。
 
@@ -623,14 +633,14 @@ V 也由 latent 线性生成，因此可先对 latent 加权求和，得到当�
 
 V is also a linear projection of the latent. First aggregate latents into a 512-dimensional representation for the current head, then project it into the 128-dimensional output. This avoids explicitly producing V for every history position.
 
-$$
+```math
 \begin{aligned}
 o_{t,i}
 &=\sum_j a_{t,j,i}\left(c_j^{KV}W_{UV}^{(i)}\right)\\
 &=\left(\sum_j a_{t,j,i}c_j^{KV}\right)W_{UV}^{(i)}
 =z_{t,i}W_{UV}^{(i)},\qquad z_{t,i}\in\mathbb{R}^{512}
 \end{aligned}
-$$
+```
 
 V 投影还可以与 W_O 的对应分块组合，形成输出侧的权重吸收。实际实现也可以先得到各 head 的 128 维输出，再调用 W_O；两者的数学重排不要求采用同一种 kernel。
 
@@ -646,9 +656,9 @@ The rearrangement relies on a fixed, position-independent W_UK. If historical Ro
 
 Decoupled RoPE separates the two paths: content scores read 512-dimensional latents directly, while positional scores use each current head's 64-dimensional RoPE query and the shared cached positional key. The two scores are added before the original scaling and softmax. [DeepSeek-V2, Decoupled RoPE](https://arxiv.org/html/2405.04434v5#S2.SS1.SSS3)
 
-$$
+```math
 s_{t,j,i}=\alpha\left[\widetilde q_{t,i}(c_j^{KV})^T+q_{t,i}^R(k_j^R)^T\right]+M_{t,j}
-$$
+```
 
 变换后内容 Query 是 512 维，位置分量是 64 维，但这只是等价重排；缩放系数仍由原始 Q/K 的 192 维计算和模型配置决定，不能改用 `1/√576`。
 
