@@ -18,7 +18,7 @@ Personal learning notes and coding exercises, organized by foundations, post-tra
 
 | 方向 | 笔记与练习 |
 | --- | --- |
-| 基础原理 `foundations/` | [梯度下降与反向传播](foundations/backpropagation.md) · [Transformer 与 KV Cache](foundations/transformer.md) |
+| 基础原理 `foundations/` | [梯度下降与反向传播](foundations/backpropagation.md) · [Transformer、KV Cache 与 MLA](foundations/transformer.md) |
 | 后训练 `post-training/` | [QLoRA](post-training/sft/qlora.md) · [策略梯度、PPO 与 GRPO](post-training/rl/ppo-grpo.md) · [OPD](post-training/opd/opd.md) |
 | 应用方法 `applications/` | [LightRAG](applications/rag/light-rag.md) · [Generative Agents](applications/agents/generative-agents.md) · [Deep Search](applications/deep-search/deep-search.md) |
 | 训练工程 `systems/` | [流水线并行](systems/pipeline-parallelism/pipeline-parallelism.md) · [DeepSpeed](systems/deepspeed/deepspeed.md) · [Megatron-LM](systems/megatron-lm/megatron-lm.md) |
@@ -27,7 +27,7 @@ Personal learning notes and coding exercises, organized by foundations, post-tra
 
 | Area | Notes and exercises |
 | --- | --- |
-| Foundations `foundations/` | [Gradients and backpropagation](foundations/backpropagation.md) · [Transformer and KV Cache](foundations/transformer.md) |
+| Foundations `foundations/` | [Gradients and backpropagation](foundations/backpropagation.md) · [Transformer, KV Cache, and MLA](foundations/transformer.md) |
 | Post-training `post-training/` | [QLoRA](post-training/sft/qlora.md) · [Policy gradients, PPO, and GRPO](post-training/rl/ppo-grpo.md) · [OPD](post-training/opd/opd.md) |
 | Applications `applications/` | [LightRAG](applications/rag/light-rag.md) · [Generative Agents](applications/agents/generative-agents.md) · [Deep Search](applications/deep-search/deep-search.md) |
 | Training systems `systems/` | [Pipeline Parallelism](systems/pipeline-parallelism/pipeline-parallelism.md) · [DeepSpeed](systems/deepspeed/deepspeed.md) · [Megatron-LM](systems/megatron-lm/megatron-lm.md) |
