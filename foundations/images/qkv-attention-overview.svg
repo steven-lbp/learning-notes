@@ -1,0 +1,218 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="2100" viewBox="0 0 1200 2100" role="img" aria-labelledby="title desc">
+  <title id="title">多头 Attention：QKV 投影、分头、Mask、加权与输出全流程</title>
+  <desc id="desc">一个 batch 中有 3 个样本，即 batch_size 为 3。原始长度分别为 5、3、4 个 Token，Padding 后每个样本都占 5 个 Token 位置，整个 batch 共占 15 个位置。输入 3×5×512 的三个轴分别是 batch 内样本数、每个样本 Padding 后的 Token 长度、每个 Token 的特征维度。采用 8 个 head、每头 64 维，经过三组 512×512 的模型权重生成 Q、K、V，分头后各为 3×5×8×64。Q、K 应用 RoPE，V 不旋转。固定一个样本和 head，5×64 的 Q 与转置 K 相乘得到 5×5 分数，经缩放、Mask、逐行 softmax 得到权重，再乘 5×64 的 V。示例放大有效长度为 3 的第二个样本的第三个 Query，展示权重约为 0.4223、0.1554、0.4223、0、0，以及 64 维输出的前两项约为 0.8446 和 1。最后合并 8 个 head，输出仍为 3×5×512。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 Z" fill="#64748b"/></marker>
+    <style>
+      text{font-family:Arial,"PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;fill:#172b43}
+      .title{font-size:34px;font-weight:700}
+      .subtitle{font-size:20px;fill:#53657a}
+      .legend{font-size:20px;font-weight:600}
+      .section{font-size:28px;font-weight:700}
+      .label{font-size:22px;text-anchor:middle}
+      .shape{font-size:26px;font-weight:700;text-anchor:middle}
+      .small{font-size:19px;text-anchor:middle;fill:#53657a}
+      .op{font-size:19px;text-anchor:middle;fill:#53657a}
+      .weight{fill:#edf9f1;stroke:#62ad7b;stroke-width:2}
+      .activation{fill:#edf5ff;stroke:#79a5dd;stroke-width:2}
+      .operation{fill:#f1f4f8;stroke:#ccd5df;stroke-width:1.5}
+      .flow{fill:none;stroke:#64748b;stroke-width:2.5;marker-end:url(#arrow)}
+      .cell{font-size:18px;text-anchor:middle}
+      .cell-label{font-size:18px;text-anchor:middle;fill:#53657a}
+    </style>
+  </defs>
+  <rect width="1200" height="2100" fill="#ffffff"/>
+  <text x="44" y="52" class="title">多头 Attention · 从 QKV 到输出</text>
+  <text x="44" y="88" class="subtitle">一个 batch：3 个样本 × 每样本 5 个 Token 位置 = 15 个位置（含 Padding）；8 个 head × 64 维</text>
+
+  <rect x="44" y="112" width="354" height="44" rx="10" class="weight"/>
+  <text x="60" y="140" class="legend">模型权重：学习得到，按层复用</text>
+  <rect x="414" y="112" width="354" height="44" rx="10" class="activation"/>
+  <text x="430" y="140" class="legend">计算张量：本次前向生成的数值</text>
+  <rect x="784" y="112" width="372" height="44" rx="10" class="operation"/>
+  <text x="800" y="140" class="legend">运算：改变数值、布局或可见性</text>
+
+  <rect x="44" y="190" width="280" height="108" rx="14" fill="#f8fafc" stroke="#d6dfe9"/>
+  <text x="184" y="218" class="small">同一个 batch 中的 3 个样本</text>
+  <text x="184" y="250" class="label">原始长度：5 / 3 / 4</text>
+  <text x="184" y="282" class="small">各自补齐为 5 个 Token 位置</text>
+  <rect x="372" y="190" width="456" height="108" rx="16" class="activation"/>
+  <text x="600" y="212" class="label">一个 batch 的层输入 X</text>
+  <text x="600" y="244" class="shape">[3,5,512]</text>
+  <text x="600" y="267" font-size="18" text-anchor="middle">3 = batch_size：这个 batch 中的样本数</text>
+  <text x="600" y="288" font-size="18" text-anchor="middle">5 = 每个样本 Padding 后的 Token 位置数</text>
+  <rect x="868" y="190" width="288" height="108" rx="14" fill="#f8fafc" stroke="#d6dfe9"/>
+  <text x="1012" y="228" class="label">每个 Token 有 512 个特征</text>
+  <text x="1012" y="260" class="small">矩阵形状按 X @ W 标注</text>
+
+  <text x="44" y="324" class="section">① 同一输入，三个不同的投影</text>
+  <rect x="44" y="352" width="336" height="444" rx="18" fill="#fafcff" stroke="#e1e7ef"/>
+  <rect x="432" y="352" width="336" height="444" rx="18" fill="#fafcff" stroke="#e1e7ef"/>
+  <rect x="820" y="352" width="336" height="444" rx="18" fill="#fafcff" stroke="#e1e7ef"/>
+  <path class="flow" d="M600 298 V344 H212 V364"/>
+  <path class="flow" d="M600 344 V364"/>
+  <path class="flow" d="M600 344 H988 V364"/>
+  <rect x="64" y="364" width="296" height="84" rx="12" class="weight"/>
+  <text x="212" y="396" class="label">W_Q</text>
+  <text x="212" y="432" class="shape">[512 × 512]</text>
+  <path class="flow" d="M212 448 V480"/>
+  <rect x="64" y="480" width="296" height="74" rx="12" class="activation"/>
+  <text x="212" y="511" class="label">Q = X W_Q</text>
+  <text x="212" y="542" class="shape">[3,5,512]</text>
+  <path class="flow" d="M212 554 V586"/>
+  <rect x="56" y="586" width="312" height="64" rx="10" class="operation"/>
+  <text x="212" y="612" class="op">reshape / split：512 → 8 × 64</text>
+  <text x="212" y="638" class="op">Q 应用 RoPE，shape 不变</text>
+  <path class="flow" d="M212 650 V682"/>
+  <rect x="56" y="682" width="312" height="94" rx="12" class="activation"/>
+  <text x="212" y="721" class="shape">Q [3,5,8,64]</text>
+  <text x="212" y="756" class="small">发起匹配的 Query</text>
+  <rect x="452" y="364" width="296" height="84" rx="12" class="weight"/>
+  <text x="600" y="396" class="label">W_K</text>
+  <text x="600" y="432" class="shape">[512 × 512]</text>
+  <path class="flow" d="M600 448 V480"/>
+  <rect x="452" y="480" width="296" height="74" rx="12" class="activation"/>
+  <text x="600" y="511" class="label">K = X W_K</text>
+  <text x="600" y="542" class="shape">[3,5,512]</text>
+  <path class="flow" d="M600 554 V586"/>
+  <rect x="444" y="586" width="312" height="64" rx="10" class="operation"/>
+  <text x="600" y="612" class="op">reshape / split：512 → 8 × 64</text>
+  <text x="600" y="638" class="op">K 应用 RoPE，shape 不变</text>
+  <path class="flow" d="M600 650 V682"/>
+  <rect x="444" y="682" width="312" height="94" rx="12" class="activation"/>
+  <text x="600" y="721" class="shape">K [3,5,8,64]</text>
+  <text x="600" y="756" class="small">参与匹配的 Key</text>
+  <rect x="840" y="364" width="296" height="84" rx="12" class="weight"/>
+  <text x="988" y="396" class="label">W_V</text>
+  <text x="988" y="432" class="shape">[512 × 512]</text>
+  <path class="flow" d="M988 448 V480"/>
+  <rect x="840" y="480" width="296" height="74" rx="12" class="activation"/>
+  <text x="988" y="511" class="label">V = X W_V</text>
+  <text x="988" y="542" class="shape">[3,5,512]</text>
+  <path class="flow" d="M988 554 V586"/>
+  <rect x="832" y="586" width="312" height="64" rx="10" class="operation"/>
+  <text x="988" y="612" class="op">reshape / split：512 → 8 × 64</text>
+  <text x="988" y="638" class="op">V 不应用 RoPE</text>
+  <path class="flow" d="M988 650 V682"/>
+  <rect x="832" y="682" width="312" height="94" rx="12" class="activation"/>
+  <text x="988" y="721" class="shape">V [3,5,8,64]</text>
+  <text x="988" y="756" class="small">提供被加权内容的 Value</text>
+
+  <path class="flow" d="M212 776 V812 H600 V884"/>
+  <path class="flow" d="M600 776 V884"/>
+  <path class="flow" d="M1144 729 H1178 V1590 H1156"/>
+  <text x="44" y="850" class="section">② 放大一个样本、一个 head</text>
+
+  <rect x="44" y="884" width="1112" height="100" rx="14" class="activation"/>
+  <text x="600" y="925" class="shape">Q_i [5,64] @ K_iᵀ [64,5] → 分数 S_i [5,5]</text>
+  <text x="600" y="960" class="small">每个样本、每个 head 独立计算；全体分数的 shape 为 [3,8,5,5]</text>
+  <path class="flow" d="M600 984 V1012"/>
+  <rect x="44" y="1012" width="1112" height="82" rx="14" class="operation"/>
+  <text x="600" y="1045" class="shape">分数 / 8（√64） + Mask → 沿 Key 列做 softmax</text>
+  <text x="600" y="1077" class="small">causal 屏蔽未来 Key，Padding Mask 屏蔽补齐 Key；不可见分数设为 −∞，权重为 0</text>
+  <path class="flow" d="M600 1094 V1110 H304 V1122"/>
+
+  <rect x="44" y="1122" width="520" height="360" rx="14" class="activation"/>
+  <text x="304" y="1158" font-size="24" font-weight="700" text-anchor="middle">A_i [5,5]：每一行分配一次权重</text>
+  <text x="179" y="1192" class="cell-label">K₁</text>
+  <text x="249" y="1192" class="cell-label">K₂</text>
+  <text x="319" y="1192" class="cell-label">K₃</text>
+  <text x="389" y="1192" class="cell-label">Pad₄</text>
+  <text x="459" y="1192" class="cell-label">Pad₅</text>
+  <text x="108" y="1236" class="cell-label">Q₁</text>
+  <rect x="146" y="1210" width="66" height="40" rx="5" fill="#e2efff" stroke="#d6dfe9"/>
+  <text x="179" y="1236" class="cell">1</text>
+  <rect x="216" y="1210" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="249" y="1236" class="cell">0</text>
+  <rect x="286" y="1210" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="319" y="1236" class="cell">0</text>
+  <rect x="356" y="1210" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="389" y="1236" class="cell">0</text>
+  <rect x="426" y="1210" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="459" y="1236" class="cell">0</text>
+  <text x="108" y="1280" class="cell-label">Q₂</text>
+  <rect x="146" y="1254" width="66" height="40" rx="5" fill="#e2efff" stroke="#d6dfe9"/>
+  <text x="179" y="1280" class="cell">·</text>
+  <rect x="216" y="1254" width="66" height="40" rx="5" fill="#e2efff" stroke="#d6dfe9"/>
+  <text x="249" y="1280" class="cell">·</text>
+  <rect x="286" y="1254" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="319" y="1280" class="cell">0</text>
+  <rect x="356" y="1254" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="389" y="1280" class="cell">0</text>
+  <rect x="426" y="1254" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="459" y="1280" class="cell">0</text>
+  <text x="108" y="1324" class="cell-label" font-weight="700">Q₃</text>
+  <rect x="146" y="1298" width="66" height="40" rx="5" fill="#cfe3ff" stroke="#79a5dd"/>
+  <text x="179" y="1324" class="cell" font-weight="700">0.4223</text>
+  <rect x="216" y="1298" width="66" height="40" rx="5" fill="#cfe3ff" stroke="#79a5dd"/>
+  <text x="249" y="1324" class="cell" font-weight="700">0.1554</text>
+  <rect x="286" y="1298" width="66" height="40" rx="5" fill="#cfe3ff" stroke="#79a5dd"/>
+  <text x="319" y="1324" class="cell" font-weight="700">0.4223</text>
+  <rect x="356" y="1298" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#79a5dd"/>
+  <text x="389" y="1324" class="cell" font-weight="700">0</text>
+  <rect x="426" y="1298" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#79a5dd"/>
+  <text x="459" y="1324" class="cell" font-weight="700">0</text>
+  <text x="108" y="1368" class="cell-label">Q₄</text>
+  <rect x="146" y="1342" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="179" y="1368" class="cell">—</text>
+  <rect x="216" y="1342" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="249" y="1368" class="cell">—</text>
+  <rect x="286" y="1342" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="319" y="1368" class="cell">—</text>
+  <rect x="356" y="1342" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="389" y="1368" class="cell">—</text>
+  <rect x="426" y="1342" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="459" y="1368" class="cell">—</text>
+  <text x="108" y="1412" class="cell-label">Q₅</text>
+  <rect x="146" y="1386" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="179" y="1412" class="cell">—</text>
+  <rect x="216" y="1386" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="249" y="1412" class="cell">—</text>
+  <rect x="286" y="1386" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="319" y="1412" class="cell">—</text>
+  <rect x="356" y="1386" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="389" y="1412" class="cell">—</text>
+  <rect x="426" y="1386" width="66" height="40" rx="5" fill="#f1f4f8" stroke="#d6dfe9"/>
+  <text x="459" y="1412" class="cell">—</text>
+
+  <text x="304" y="1453" font-size="17" text-anchor="middle" fill="#53657a">行 = Query；列 = Key；有效行的权重和为 1</text>
+  <text x="304" y="1476" font-size="17" text-anchor="middle" fill="#53657a">第 4 / 5 行为 Padding Query，输出忽略；· 表示其他有效权重</text>
+
+  <rect x="592" y="1122" width="564" height="360" rx="14" fill="#fafcff" stroke="#d6dfe9"/>
+  <text x="618" y="1158" font-size="24" font-weight="700">看清第 3 行的数字怎么来</text>
+  <text x="618" y="1193" font-size="20" fill="#53657a">第 2 个样本、第 1 个 head、第 3 个 Query</text>
+  <text x="618" y="1225" font-size="20" fill="#53657a">64 维只列前两维，其余分量均为 0：</text>
+  <text x="618" y="1258" font-size="21">q = [1,0,…]，K₁ = [8,0,…]</text>
+  <text x="618" y="1290" font-size="21">K₂ = [0,8,…]，K₃ = [8,0,…]</text>
+  <text x="618" y="1324" font-size="21">点积分数：[8,0,8,*,*]</text>
+  <text x="618" y="1356" font-size="21">缩放并加 Mask：[1,0,1,−∞,−∞]</text>
+  <text x="618" y="1390" font-size="21">softmax →</text>
+  <text x="618" y="1425" font-size="25" font-weight="700">[0.4223,0.1554,0.4223,0,0]</text>
+  <text x="618" y="1460" font-size="19" fill="#53657a">第 4 / 5 个 Key 是 Padding，因此权重为 0。</text>
+
+  <path class="flow" d="M304 1482 V1500 H600 V1518"/>
+  <rect x="44" y="1518" width="1112" height="146" rx="14" class="activation"/>
+  <text x="600" y="1557" class="shape">A_i [5,5] @ V_i [5,64] → O_i [5,64]</text>
+  <text x="600" y="1596" font-size="21" text-anchor="middle">例：V₁ = [1,2,…]，V₂ = [0,1,…]，V₃ = [1,0,…]；其余分量均为 0</text>
+  <text x="600" y="1634" font-size="22" text-anchor="middle">o₃ ≈ 0.4223·V₁ + 0.1554·V₂ + 0.4223·V₃ ≈ [0.8446,1.0000,0,…]（64 维）</text>
+
+  <text x="44" y="1716" class="section">③ 合并 head，再做输出投影</text>
+  <text x="44" y="1750" class="subtitle">收集输出 [3,8,5,64] → transpose 为 [3,5,8,64] → 拼接每个 Token 的 8 个 head</text>
+  <rect x="44" y="1780" width="432" height="108" rx="14" class="activation"/>
+  <text x="260" y="1817" class="label">拼接 head 与特征轴</text>
+  <text x="260" y="1857" class="shape">[3,5,8,64] → [3,5,512]</text>
+  <path class="flow" d="M476 1834 H532"/>
+  <rect x="532" y="1780" width="248" height="108" rx="14" class="weight"/>
+  <text x="656" y="1817" class="label">W_O · 输出投影</text>
+  <text x="656" y="1857" class="shape">[512 × 512]</text>
+  <path class="flow" d="M780 1834 H836"/>
+  <rect x="836" y="1780" width="320" height="108" rx="14" class="activation"/>
+  <text x="996" y="1817" class="label">当前层 Attention 输出 Y</text>
+  <text x="996" y="1857" class="shape">[3,5,512]</text>
+
+  <line x1="44" y1="1920" x2="1156" y2="1920" stroke="#dce3eb"/>
+  <text x="44" y="1960" font-size="20">W_Q / W_K / W_V / W_O 是按层保存的模型权重，跨样本、Token 复用。</text>
+  <text x="44" y="1994" font-size="20">Attention 权重 A 是 Q/K 算出来的；reshape / transpose 只改布局，不会生成新特征。</text>
+  <text x="44" y="2028" font-size="20">Padding Key 的列被屏蔽；Padding Query 的输出忽略；张量 shape 保持不变。</text>
+  <text x="44" y="2062" font-size="20">512 = 8 × 64 是本例配置；并非所有模型都满足 hidden_size = heads × head_dim（见 5.1）。</text>
+</svg>

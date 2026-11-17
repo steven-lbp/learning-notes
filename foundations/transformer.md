@@ -191,11 +191,15 @@ In this example, all 64 components per head form 32 pairs. Each pair uses both s
 
 ### 3.4 加上 batch 和 Padding
 
-若三个样本分别有 5、3、4 个 Token，Padding 后统一为 5 个位置。batch 轴表示不同样本，head 轴表示不同投影子空间，两者各自独立计算。Padding 的 Key 位置由 Mask 屏蔽；Mask 改变可见性，保留张量的 shape。
+这里展示的是**一个 batch，batch_size=3**。其中 3 个样本原本分别有 5、3、4 个 Token，Padding 后**每个样本都占 5 个 Token 位置**。因此输入 X 的 `[3,5,512]` 依次表示 `[batch 内样本数, 每个样本 Padding 后的 Token 长度, 每个 Token 的特征维度]`。整个 batch 共占 `3 × 5 = 15` 个位置，包括 12 个有效 Token 和 3 个 Padding 位置。
+
+batch 轴表示不同样本，head 轴表示不同投影子空间，两者各自独立计算。Padding 的 Key 位置由 Mask 屏蔽；Mask 改变可见性，保留张量的 shape。
 
 主线统一使用 batch-first 布局。sequence-first 以及合并 QKV 的打包方式放在附录中。
 
-For samples containing 5, 3, and 4 tokens, padding gives five positions per sample. Batch indexes independent samples, while head indexes independently projected subspaces. Padding masks block padded key positions without changing tensor shapes.
+This is **one batch with batch_size=3**. Its samples originally contain 5, 3, and 4 tokens. After padding, **each sample occupies five token positions**. The input shape `[3,5,512]` therefore means `[samples in the batch, padded token length per sample, features per token]`. The batch occupies `3 × 5 = 15` positions: 12 valid tokens and 3 padding positions.
+
+Batch indexes independent samples, while head indexes independently projected subspaces. Padding masks block padded key positions without changing tensor shapes.
 
 The main example uses batch-first layout throughout. Sequence-first layout and fused QKV packing are covered in the appendix.
 
@@ -207,7 +211,11 @@ The main example uses batch-first layout throughout. Sequence-first layout and f
 | Attention 输出 / Per-head outputs | `[3, 5, 8, 64]` |
 | 拼接与 W_O 后的输出 / Output after concatenation and W_O | `[3, 5, 512]` |
 
-![Transformer QKV：从输入到注意力输出](images/qkv-attention-overview.jpg)
+下图用同一组维度串起完整前向过程，并放大第二个样本、一个 head 的第三个 Query，展示 Mask、softmax 和 V 加权的数值关系。示例采用 causal Mask，第二个样本的第 4、5 个位置为 Padding。
+
+The diagram follows the same dimensions through the full forward pass, then zooms into the third query of one head in the second sample to show masking, softmax, and value aggregation numerically. The example uses a causal mask; positions 4 and 5 of the second sample are padding.
+
+![多头 Attention 全流程：投影、分头、RoPE、Mask、softmax、V 加权、拼接与输出](images/qkv-attention-overview.svg)
 
 ## 4. 推理：Prefill、Decode 与 KV Cache
 
