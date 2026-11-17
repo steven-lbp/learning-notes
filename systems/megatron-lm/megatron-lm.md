@@ -4,14 +4,14 @@
 
 Megatron-LM 是 NVIDIA 开发的大模型训练框架，通过组合不同并行方式，在多 GPU、多机器上训练大型 Transformer。
 
-Megatron-LM is NVIDIA's framework for training large Transformer models across multiple GPUs and machines by combining parallelism strategies.
-
 | 方式 | 划分对象 |
 | --- | --- |
 | Tensor Parallelism（TP） | 单层中的矩阵计算 |
 | Pipeline Parallelism（PP） | 不同层组成的 Stage |
 | Sequence Parallelism（SP） | 部分激活的 sequence 维度，例如 LayerNorm、Dropout 的输入 |
 | Data Parallelism（DP） | 不同 Batch 数据，各副本协同更新同一组参数 |
+
+Megatron-LM is NVIDIA's framework for training large Transformer models across multiple GPUs and machines by combining parallelism strategies.
 
 | Strategy | What is partitioned |
 | --- | --- |

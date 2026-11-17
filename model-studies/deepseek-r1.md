@@ -63,6 +63,12 @@ PPO 式 RLHF 常涉及以下模型：
 - **Reward Model：** 评价回答质量。
 - **Value Model：** 估计状态对应的预期回报。
 
+![](images/20250204234222.png)
+
+DPO 直接从偏好数据优化模型；GRPO 则用组内相对奖励估计 Advantage，减少对 Value Model 的依赖。
+
+![](images/20250204234318.png)
+
 PPO-style RLHF commonly involves:
 
 - **Policy:** the model being trained.
@@ -70,13 +76,7 @@ PPO-style RLHF commonly involves:
 - **Reward Model:** evaluates response quality.
 - **Value Model:** estimates expected return for a state.
 
-![](images/20250204234222.png)
-
-DPO 直接从偏好数据优化模型；GRPO 则用组内相对奖励估计 Advantage，减少对 Value Model 的依赖。
-
 DPO optimizes the model directly from preference data. GRPO estimates Advantage from group-relative rewards, reducing reliance on a Value Model.
-
-![](images/20250204234318.png)
 
 ### 3. Reward signals
 

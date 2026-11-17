@@ -25,13 +25,13 @@ Attention lets each token read information from visible positions according to r
 
 Tokenizer 产生 Token 编号，Embedding 将每个编号映射成 `hidden_size` 维向量。本例词表为 `A B C D E`，主干宽度为 4；输入 `A B C` 后，H⁽⁰⁾ 的 shape 是 `[3,4]`。**Token 数、特征宽度、词表大小分别是 3、4、5。**
 
-The tokenizer produces IDs, and Embedding maps each ID to a `hidden_size`-dimensional vector. With vocabulary `A B C D E` and backbone width 4, input `A B C` gives H⁽⁰⁾ of shape `[3,4]`. **Token count, feature width, and vocabulary size are 3, 4, and 5.**
-
 ```text
 A B C → Token IDs [0,1,2] → Embedding → H⁽⁰⁾ [3,4]
 ```
 
 H⁽ℓ⁾ 是第 ℓ 层的表示矩阵，hₜ⁽ℓ⁾ 是第 t 个位置的一行。**行对应 Token 位置，列对应特征。** 单个位置始终是完整的 4 维向量；少计算一行，不会让其他行缺少特征。
+
+The tokenizer produces IDs, and Embedding maps each ID to a `hidden_size`-dimensional vector. With vocabulary `A B C D E` and backbone width 4, input `A B C` gives H⁽⁰⁾ of shape `[3,4]`. **Token count, feature width, and vocabulary size are 3, 4, and 5.**
 
 H⁽ℓ⁾ is a layer's representation matrix; hₜ⁽ℓ⁾ is the row for position t. **Rows are token positions; columns are features.** Each position has a complete 4-dimensional vector; omitting a row does not remove features from another row.
 
@@ -39,9 +39,9 @@ H⁽ℓ⁾ is a layer's representation matrix; hₜ⁽ℓ⁾ is the row for posi
 
 Embedding 依次经过 Transformer Blocks。每层从本层输入生成 Q/K/V，Attention 读取可见位置的信息，再经输出投影、残差和 FFN / MoE 更新 Hidden State。层内投影宽度可以变化，完整 Block 的输出回到主干宽度。下文用 X 表示本层 Attention 的输入。
 
-Embeddings pass through Transformer blocks. Each layer projects its input into Q/K/V, reads visible positions with Attention, and updates hidden states through output projection, residuals, and FFN / MoE. Internal widths may vary; complete blocks return to the backbone width. X below denotes the current Attention input.
-
 **预测下一个 Token，直接用的是最后一层、最后一个输入位置的完整向量。** 它经 LM Head 映射为词表分数，再通过取最大值或采样选出下一 Token。本例送入输出头的是 `[1,4]`，得到的是 `[1,5]`。
+
+Embeddings pass through Transformer blocks. Each layer projects its input into Q/K/V, reads visible positions with Attention, and updates hidden states through output projection, residuals, and FFN / MoE. Internal widths may vary; complete blocks return to the backbone width. X below denotes the current Attention input.
 
 **Next-token prediction directly uses the final layer's vector at the last input position.** The LM Head maps it to vocabulary scores, followed by argmax or sampling. Here, `[1,4]` becomes `[1,5]`.
 
@@ -55,8 +55,6 @@ First fix one sample and one head: **project QKV → compute dot products → sc
 
 同一个输入 X 分别经过三个可学习的线性投影，得到 Q、K、V。这里采用行向量约定，省略 bias。
 
-The same input X passes through three learned linear projections to produce Q, K, and V. The equations use row vectors and omit biases.
-
 ```math
 Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V
 ```
@@ -68,6 +66,8 @@ Q=XW_Q,\qquad K=XW_K,\qquad V=XW_V
 | V — Value | 各个位置提供、被加权组合的内容 / The content each position contributes |
 
 例如，“钱”这个位置的 Q 可以与前面“小王”“银行”“取”等位置的 K 匹配，再按权重组合它们的 V。实际权重由模型学习。**Q、K 决定各位置的权重，V 提供被加权的内容；同一位置的 K 与 V 对应同一个 Token。**
+
+The same input X passes through three learned linear projections to produce Q, K, and V. The equations use row vectors and omit biases.
 
 For example, the query at `钱` can match keys at preceding positions such as `小王`, `银行`, and `取`, then combine their values. The actual weights are learned. **Q and K determine weights over positions; V supplies the content. Each key is paired with the value at the same token position.**
 
@@ -107,8 +107,6 @@ s_j=\frac{q\cdot k_j}{\sqrt{d_k}}+m_j
 
 取三个位置的 V 如下。每个权重乘以同一位置的 V，再将对应分量相加，得到当前 Query 的输出。
 
-Using the following values, multiply each weight by the value at the same position, then sum corresponding components to obtain the current query's output.
-
 ```text
 V₁ = [1, 2]     V₂ = [0, 1]     V₃ = [1, 0]
 
@@ -118,13 +116,13 @@ o ≈ 0.401 × [1, 2] + 0.198 × [0, 1] + 0.401 × [1, 0]
 
 两个分量分别是 `0.401×1 + 0.198×0 + 0.401×1` 和 `0.401×2 + 0.198×1 + 0.401×0`。输出有 2 维，因为本例的 V 有 2 维。一般情况下，**Q 与 K 的每头维度必须匹配；V 可以有不同维度，输出维度由 V 决定。**
 
+Using the values shown above, multiply each weight by the value at the same position, then sum corresponding components to obtain the current query's output.
+
 The two output components are `0.401×1 + 0.198×0 + 0.401×1` and `0.401×2 + 0.198×1 + 0.401×0`. The output has two components because V does. In general, **Q and K must have matching per-head dimensions; V may have a different dimension, which determines the output dimension.**
 
 ### 2.5 把所有 Query 一起计算
 
 把各个 Query 按行放在 Q 中，就能一次计算它们与所有 Key 的关系。匹配矩阵和权重矩阵的**行表示 Query 位置，列表示 Key 位置**；softmax 沿每一行计算。M 在可见位置为 0，不可见位置为负无穷。
-
-Stack queries as rows of Q to compute all query-key relationships together. **Rows index query positions, and columns index key positions** in both the score and weight matrices. Softmax operates along each row. M is zero for visible positions and negative infinity for blocked positions.
 
 ```math
 A=\mathrm{softmax}\left(\frac{QK^T}{\sqrt{d_k}}+M\right),\qquad
@@ -132,6 +130,8 @@ O=AV
 ```
 
 **输出行数由 Query 行数决定，Key 数量决定每行有多少个读取权重。** 一个新位置的 Q 读取 4 条 KV，仍只产生该位置的一个 Attention 输出，不会重新生成那 4 个位置的 Hidden States。
+
+Stack queries as rows of Q to compute all query-key relationships together. **Rows index query positions, and columns index key positions** in both the score and weight matrices. Softmax operates along each row. M is zero for visible positions and negative infinity for blocked positions.
 
 **Output rows follow query rows; the number of keys determines weights per row.** One new-position query reading four KV entries still produces one position's Attention output, rather than new hidden states for all four KV positions.
 
@@ -153,8 +153,6 @@ This example chooses `hidden_size=512`, `num_heads=8`, and `head_dim=64`. Each Q
 
 本节多头示例使用 5 个 Token；每个 head 独立执行第 2 节的 Attention，最后合并 head 轴与特征轴。
 
-This multi-head example uses five tokens. Each head independently performs the Attention computation from Section 2. Concatenation then merges the head and feature axes.
-
 | 阶段 / Stage | Shape |
 | --- | --- |
 | 输入 X / Input X | `[5, 512]` |
@@ -168,8 +166,6 @@ This multi-head example uses five tokens. Each head independently performs the A
 
 固定一个 head 后，Q、K、V 都是 `[5, 64]`。QKᵀ 沿 64 维特征求和，得到每个 Query 对每个 Key 的 `5 × 5` 分数；A 乘 V 则沿 5 个 Key 位置求和，得到每个 Query 的 64 维输出。
 
-For one head, Q, K, and V each have shape `[5, 64]`. QKᵀ sums over the 64 features to produce `5 × 5` position scores. Multiplying A by V sums over the five key positions to produce a 64-dimensional output for each query.
-
 ```math
 \underbrace{Q}_{5\times64}\underbrace{K^T}_{64\times5}
 =\underbrace{S}_{5\times5},\qquad
@@ -178,6 +174,10 @@ For one head, Q, K, and V each have shape `[5, 64]`. QKᵀ sums over the 64 feat
 ```
 
 拼接不会把不同 Token 混在一起：每个 Token 收集自己的 8 个 head 输出，得到 `8 × 64 = 512` 维。W_O 在这些特征之间做线性变换，并输出与残差分支匹配的宽度。
+
+This multi-head example uses five tokens. Each head independently performs the Attention computation from Section 2. Concatenation then merges the head and feature axes.
+
+For one head, Q, K, and V each have shape `[5, 64]`. QKᵀ sums over the 64 features to produce `5 × 5` position scores. Multiplying A by V sums over the five key positions to produce a 64-dimensional output for each query.
 
 Concatenation keeps token positions separate: each token collects its own eight head outputs into 512 dimensions. W_O linearly mixes those features and returns the width required by the residual branch.
 
@@ -201,12 +201,6 @@ batch 轴表示不同样本，head 轴表示不同投影子空间，两者各自
 
 主线统一使用 batch-first 布局。sequence-first 以及合并 QKV 的打包方式放在附录中。
 
-This is **one batch with batch_size=3**. Its samples originally contain 5, 3, and 4 tokens. After padding, **each sample occupies five token positions**. The input shape `[3,5,512]` therefore means `[samples in the batch, padded token length per sample, features per token]`. The batch occupies `3 × 5 = 15` positions: 12 valid tokens and 3 padding positions.
-
-Batch indexes independent samples, while head indexes independently projected subspaces. Padding masks block padded key positions without changing tensor shapes.
-
-The main example uses batch-first layout throughout. Sequence-first layout and fused QKV packing are covered in the appendix.
-
 | 张量 / Tensor | 完整 shape / Full shape |
 | --- | --- |
 | 输入 X / Input X | `[3, 5, 512]` |
@@ -217,9 +211,15 @@ The main example uses batch-first layout throughout. Sequence-first layout and f
 
 下图用同一组维度串起完整前向过程，并放大第二个样本、一个 head 的第三个 Query，展示 Mask、softmax 和 V 加权的数值关系。示例采用 causal Mask，第二个样本的第 4、5 个位置为 Padding。
 
-The diagram follows the same dimensions through the full forward pass, then zooms into the third query of one head in the second sample to show masking, softmax, and value aggregation numerically. The example uses a causal mask; positions 4 and 5 of the second sample are padding.
-
 ![多头 Attention 全流程：投影、分头、RoPE、Mask、softmax、V 加权、拼接与输出](images/qkv-attention-overview.svg)
+
+This is **one batch with batch_size=3**. Its samples originally contain 5, 3, and 4 tokens. After padding, **each sample occupies five token positions**. The input shape `[3,5,512]` therefore means `[samples in the batch, padded token length per sample, features per token]`. The batch occupies `3 × 5 = 15` positions: 12 valid tokens and 3 padding positions.
+
+Batch indexes independent samples, while head indexes independently projected subspaces. Padding masks block padded key positions without changing tensor shapes.
+
+The main example uses batch-first layout throughout. Sequence-first layout and fused QKV packing are covered in the appendix.
+
+The diagram follows the same dimensions through the full forward pass, then zooms into the third query of one head in the second sample to show masking, softmax, and value aggregation numerically. The example uses a causal mask; positions 4 and 5 of the second sample are padding.
 
 ## 4. 推理：Prefill、Decode 与 KV Cache
 
@@ -227,9 +227,9 @@ The diagram follows the same dimensions through the full forward pass, then zoom
 
 **Prefill 就是先把你给的输入算一遍，留下后面要用的 KV 缓存。** 模型从第一层开始，逐层计算这些输入 Token 的 Hidden State，并保存各层的 KV。最后，用输入末尾那个 Token 在最后一层的向量，预测第一个输出 Token。
 
-**Prefill processes the input you provide and saves KV for what comes next.** The model computes the input tokens' hidden states through its layers and stores each layer's KV. The last input token's final-layer vector then predicts the first output token.
-
 输入的 Token 都已经知道，所以同一层可以一起算多个位置；层与层之间仍然一层接着一层。后一层的 KV 要用前一层算出的结果，因此需要先把输入逐层处理好。
+
+**Prefill processes the input you provide and saves KV for what comes next.** The model computes the input tokens' hidden states through its layers and stores each layer's KV. The last input token's final-layer vector then predicts the first output token.
 
 All input tokens are known, so multiple positions can be computed together within a layer. Layers still run in order: later-layer KV requires results from earlier layers.
 
@@ -237,11 +237,7 @@ All input tokens are known, so multiple positions can be computed together withi
 
 模型选出一个新 Token 后，把它送回模型，才能接着预测再下一个 Token。这个过程不断重复，就是逐 Token Decode。
 
-After selecting a new token, the model feeds it back to predict the following token. Repeating this process gives token-by-token Decode.
-
 **没有 KV Cache 时，每轮通常要把历史 Token 和新 Token 一起逐层重新算一遍，才能得到各层需要的 KV。有了 KV Cache，历史 KV 可以直接读取，所以每层才只需要新算当前 Token 的 Hidden State。** 同时写入当前 Token 的新 KV，把更新后的 Hidden State 交给下一层，直到算完最后一层。
-
-**Without a KV cache, each step normally reruns the history and the new token through the layers to rebuild their KV. With a cache, historical KV can be read directly, so each layer only needs to compute the current token's new hidden state.** It writes the current token's KV and passes the updated hidden state onward through the remaining layers.
 
 | 阶段 / Phase | 这一轮算谁 / What runs now | 每层新算的 H / New H per layer | KV 怎么处理 / KV handling |
 | --- | --- | --- | --- |
@@ -250,13 +246,15 @@ After selecting a new token, the model feeds it back to predict the following to
 
 当前 Token 可以读很多条历史 KV，但这轮新算的 Hidden State 仍只有它自己的一行。**读旧 KV 是取以前算好的结果，不是让那些旧 Token 再跑一遍模型。** 一轮 Decode 对应当前 Token 走完全部层；层数和生成轮次是两回事。
 
+After selecting a new token, the model feeds it back to predict the following token. Repeating this process gives token-by-token Decode.
+
+**Without a KV cache, each step normally reruns the history and the new token through the layers to rebuild their KV. With a cache, historical KV can be read directly, so each layer only needs to compute the current token's new hidden state.** It writes the current token's KV and passes the updated hidden state onward through the remaining layers.
+
 The current token may read many historical KV entries while producing only its own new hidden-state row. **Reading old KV retrieves earlier results rather than rerunning old tokens.** One Decode step takes the current token through all layers; layer depth and generation steps are separate counts.
 
 ### 4.3 缓存里保存什么
 
 旧位置看不到后来新增的 Token，因此后来加 Token 不会改变那些已经算好的 KV，后续可以直接复用。**留下来的主要是各层的 KV，通常不需要把所有旧 Token 的完整 Hidden States 也一直存着。** KV 是 Hidden State 投影后的另一份结果，保存 KV 不等于另存一份完整 H。
-
-Past positions cannot see later tokens, so adding a token does not change previously computed KV. **The model keeps historical KV and usually does not also retain every past token's full hidden states.** KV is projected from hidden states; caching it does not mean keeping a second full H history.
 
 | 数据 / Data | 怎么用 / Use |
 | --- | --- |
@@ -266,17 +264,19 @@ Past positions cannot see later tokens, so adding a token does not change previo
 
 **当前 Hidden State 仍然必须算：它要生成 Q/K/V、传到后面的层，最后还要用来预测下一个 Token。** 省掉的是旧位置的重复计算。
 
-**The current hidden state is still needed to produce Q/K/V, pass information to later layers, and predict the next token.** Caching saves repeated computation for old positions.
-
 ![Prefill 与 Decode 的计算流程](images/prefill-decode-hidden-state-cache.svg)
+
+Past positions cannot see later tokens, so adding a token does not change previously computed KV. **The model keeps historical KV and usually does not also retain every past token's full hidden states.** KV is projected from hidden states; caching it does not mean keeping a second full H history.
+
+**The current hidden state is still needed to produce Q/K/V, pass information to later layers, and predict the next token.** Caching saves repeated computation for old positions.
 
 ### 4.4 Prefix Caching：相同的前缀接着用
 
 如果不同请求前面有一段完全相同的输入，第一次算好的逐层 KV 可以留给下一次用。下一次只处理新加的输入，再继续生成。复用要求前缀 Token、模型权重、位置编码和 Mask 等条件匹配。
 
-If requests begin with identical input, per-layer KV from the first request can be reused. The next request processes only newly added input before continuing generation. Reuse requires matching prefix tokens, model weights, positions, masks, and other computation settings.
-
 **省掉的是重新计算同一段前缀的工作，后面的 Token 仍然要读它的 KV。**
+
+If requests begin with identical input, per-layer KV from the first request can be reused. The next request processes only newly added input before continuing generation. Reuse requires matching prefix tokens, model weights, positions, masks, and other computation settings.
 
 **This saves recomputing the shared prefix; later tokens still read its KV.**
 
@@ -296,8 +296,6 @@ The total query width is `query head count × d_k`. Each query head produces a `
 
 Qwen3-30B-A3B 的 `hidden_size=2048`，Q 有 32 个 head，K/V 各有 4 个 head，每头为 128 维。因此一个 Token 投影后，Q 是 4096 维，K、V 各是 512 维。每 8 个 Q heads 共享一组 K/V，共 4 组；不同 Q heads 仍分别计算各自的权重。
 
-Qwen3-30B-A3B has `hidden_size=2048`, 32 query heads, 4 key/value heads, and 128 dimensions per head. Each token projects to a 4096-dimensional Q and two 512-dimensional K/V vectors. Eight query heads share each KV head, forming four groups, while retaining separate query-dependent attention weights. [Official configuration](https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/config.json)
-
 | 阶段 / Stage，省略 batch / Batch omitted | Shape |
 | --- | --- |
 | 5 个 Token 的输入 X / Input X | `[5, 2048]` |
@@ -309,6 +307,8 @@ Qwen3-30B-A3B has `hidden_size=2048`, 32 query heads, 4 key/value heads, and 128
 
 这里 `2048/32=64`，实际每头却是 128 维，因此不能仅凭 hidden size 和 head 数推断每头维度。Qwen3 还包含 Q/K 归一化、RoPE 和 Mask 等操作。名字中的 A3B 指约 3B 激活参数，与 QKV 维度是不同概念。
 
+Qwen3-30B-A3B has `hidden_size=2048`, 32 query heads, 4 key/value heads, and 128 dimensions per head. Each token projects to a 4096-dimensional Q and two 512-dimensional K/V vectors. Eight query heads share each KV head, forming four groups, while retaining separate query-dependent attention weights. [Official configuration](https://huggingface.co/Qwen/Qwen3-30B-A3B/blob/main/config.json)
+
 Although `2048/32=64`, each head actually has 128 dimensions. Hidden size and head count alone therefore do not determine head dimension. Qwen3 also uses Q/K normalization, RoPE, and masking. A3B refers to roughly 3B active parameters, a separate concept from QKV dimensions.
 
 ### 5.3 DeepSeek-V3：压缩 KV 表示的 MLA
@@ -316,10 +316,6 @@ Although `2048/32=64`, each head actually has 128 dimensions. Hidden size and he
 DeepSeek-V3 的 `hidden_size=7168`，有 128 个 Q head。每个 Q/K head 包含 128 维内容分量和 64 维 RoPE 分量，共 192 维；V 每头为 128 维。
 
 Q 路径先经过 1536 维低秩中间表示，再生成各个 Q head。KV 路径把内容压到一个共享的 512 维潜在向量，并另外产生一个共享的 64 维位置 Key。**紧凑缓存只需保存这 512 + 64 = 576 个数**，不必缓存所有 head 展开后的完整 K/V。
-
-DeepSeek-V3 uses `hidden_size=7168` and 128 query heads. Each Q/K head combines 128 content dimensions with 64 RoPE dimensions, totaling 192; V has 128 dimensions per head.
-
-The query path uses a 1536-dimensional low-rank intermediate. The KV path produces a shared 512-dimensional content latent and a shared 64-dimensional positional key. **Compact caching stores these 512 + 64 = 576 values**, rather than all expanded K/V heads. [Official configuration](https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/config.json) · [Technical report, §2.1.1](https://arxiv.org/html/2412.19437v2#S2.SS1.SSS1)
 
 ```text
 One token: hidden [7168]
@@ -335,17 +331,19 @@ Concat: [128 × 128] = [16384] → W_O → hidden [7168]
 
 这里 Q/K 的 192 维负责匹配，V 的 128 维决定每个 head 的输出宽度；因此拼接结果为 16384 维。优化实现可以吸收部分投影，避免显式展开全部 K/V。
 
-Here, the 192-dimensional Q/K heads perform matching, while the 128-dimensional V heads determine output width. Concatenation therefore produces 16384 dimensions. Optimized implementations can absorb projections and avoid explicitly expanding all K/V.
-
 低秩投影、参数量、Decoupled RoPE 和矩阵吸收将在[第 6 节](#6-深入-mla低秩投影与压缩缓存计算)继续展开。
+
+DeepSeek-V3 uses `hidden_size=7168` and 128 query heads. Each Q/K head combines 128 content dimensions with 64 RoPE dimensions, totaling 192; V has 128 dimensions per head.
+
+The query path uses a 1536-dimensional low-rank intermediate. The KV path produces a shared 512-dimensional content latent and a shared 64-dimensional positional key. **Compact caching stores these 512 + 64 = 576 values**, rather than all expanded K/V heads. [Official configuration](https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/config.json) · [Technical report, §2.1.1](https://arxiv.org/html/2412.19437v2#S2.SS1.SSS1)
+
+Here, the 192-dimensional Q/K heads perform matching, while the 128-dimensional V heads determine output width. Concatenation therefore produces 16384 dimensions. Optimized implementations can absorb projections and avoid explicitly expanding all K/V.
 
 [Section 6](#6-深入-mla低秩投影与压缩缓存计算) develops the low-rank projections, parameter counts, Decoupled RoPE, and weight absorption.
 
 ### 5.4 每层、每个 Token 缓存多少数？
 
 缓存量由实际保存的表示决定。下面计算逻辑元素数，不含量化、Padding、分布式复制和缓存管理等开销；实际字节数还取决于数据类型。
-
-Cache size depends on the representation actually stored. The following counts logical elements, excluding quantization, padding, distributed replication, and management overhead. Actual bytes also depend on data type.
 
 | 结构 / Architecture | 缓存表示 / Cached representation | 元素数 / Elements |
 | --- | --- | --- |
@@ -354,6 +352,8 @@ Cache size depends on the representation actually stored. The following counts l
 | DeepSeek-V3 紧凑 MLA / Compact MLA | KV latent + 位置 Key / KV latent and positional key | `512 + 64 = 576` |
 
 这些模型的架构规模不同。若固定 32 个 Q head、每头 128 维，标准 MHA 需要缓存 `2 × 32 × 128 = 8192` 个数；改为 4 个 KV head 的 GQA 后为 1024 个数，即 1/8。
+
+Cache size depends on the representation actually stored. The table above counts logical elements, excluding quantization, padding, distributed replication, and management overhead. Actual bytes also depend on data type.
 
 These models have different architecture sizes. Holding 32 query heads and 128 dimensions per head fixed, standard MHA would cache 8192 values; GQA with four KV heads stores 1024, or one eighth as many.
 
@@ -391,11 +391,11 @@ The following uses one DeepSeek-V3 layer and one sample, with row vectors: `outp
 
 先沿图中的 Q、共享 KV 内容、位置 Key 三条分支读一遍：绿色框是模型权重，蓝色框是计算张量，橙色框及虚线箭头标出实际写入紧凑缓存的内容。下半部分接上历史读取和输出投影。
 
-Follow the query, shared KV-content, and positional-key branches first. Green boxes contain model weights, blue boxes contain computation tensors, and orange boxes with dashed arrows identify compact-cache writes. The lower half follows history reads through Attention to the output projection.
-
 ![DeepSeek-V3 MLA 全流程：各步维度、模型权重、临时张量与 KV Cache](images/deepseek-v3-mla-flow.svg)
 
 图中将融合投影拆开画以便区分用途。参考实现的 `wkv_a: 7168 → 576` 一次生成内容 latent 512 维与位置分量 64 维；`wkv_b: 512 → 32768` 一次生成 `128 × (K 内容 128 + V 128)`。RMSNorm 中的 γ 是模型权重，归一化后的 latent 才是每个 Token 的数据。图中的 K/V 为结构展开视图；直接使用紧凑缓存的计算见 [6.5](#65-如何直接使用压缩缓存)。
+
+Follow the query, shared KV-content, and positional-key branches first. Green boxes contain model weights, blue boxes contain computation tensors, and orange boxes with dashed arrows identify compact-cache writes. The lower half follows history reads through Attention to the output projection.
 
 The diagram separates fused projections by purpose. In the reference implementation, `wkv_a: 7168 → 576` produces the 512-dimensional content latent and 64-dimensional position component together; `wkv_b: 512 → 32768` produces `128 × (128 content-key + 128 value)` dimensions. RMSNorm's γ is a model weight; the normalized latent is token-specific data. K/V are shown conceptually expanded; [Section 6.5](#65-如何直接使用压缩缓存) explains direct computation with the compact cache. [Official MLA implementation](https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py)
 
@@ -419,16 +419,12 @@ Hidden-state width, latent dimensions, and per-head dimensions describe differen
 
 当前 Token 的输入 `x_t: [7168]` 先经过降维投影和 RMSNorm，得到 `c_t^KV: [512]`。这是每个 Token 自己的潜在表示，之后所有 head 的内容 K 和 V 都由它生成。
 
-The current token's input `x_t: [7168]` passes through a down-projection and RMSNorm to produce `c_t^KV: [512]`. Each token has its own latent, shared across all heads when producing content keys and values.
-
 ```math
 c_t^{KV}=\mathrm{RMSNorm}(x_tW_{DKV}),\qquad
 W_{DKV}\in\mathbb{R}^{7168\times512}
 ```
 
 两个不同的升维投影分别生成内容 K 和 V。完整结果各有 `128 × 128 = 16384` 个数，可以拆成 128 个 head，每头 128 维。
-
-Two different up-projections generate content K and V. Each complete result contains `128 × 128 = 16384` values, split into 128 heads of 128 dimensions.
 
 ```math
 K_t^C=c_t^{KV}W_{UK},\qquad V_t=c_t^{KV}W_{UV},\qquad
@@ -437,6 +433,10 @@ W_{UK},W_{UV}\in\mathbb{R}^{512\times16384}
 
 这里的“升维”是生成各 head 所需的特征，不是把原始 7168 维输入无损还原。模型在训练时就使用这套低秩结构，学习怎样把有用信息放进共享表示。
 
+The current token's input `x_t: [7168]` passes through a down-projection and RMSNorm to produce `c_t^KV: [512]`. Each token has its own latent, shared across all heads when producing content keys and values.
+
+Two different up-projections generate content K and V. Each complete result contains `128 × 128 = 16384` values, split into 128 heads of 128 dimensions.
+
 Up-projection generates the features needed by the heads; it does not losslessly reconstruct the original 7168-dimensional input. Training learns to place useful information into this shared latent within the low-rank architecture.
 
 #### 6.2.3 共享 Latent 如何产生不同的 head
@@ -444,10 +444,6 @@ Up-projection generates the features needed by the heads; it does not losslessly
 把 W_UK 按输出列拆开，第 i 个 head 使用自己的子矩阵 `W_UK^(i): [512, 128]`，V 同理。各个 head 的参数不同，所以共享输入可以产生不同结果。
 
 例如，把维度缩小为 2：同一个 `c = [2, 3]`，经过两组不同参数，可以得到 `[2, 3]` 和 `[5, -1]`。
-
-Split W_UK into output-column blocks. Head i uses its own `W_UK^(i): [512, 128]`, and V works the same way. Different head parameters produce different results from the shared input.
-
-For a two-dimensional example, the same `c = [2, 3]` can produce `[2, 3]` and `[5, -1]` through different projections.
 
 ```math
 [2,3]
@@ -466,13 +462,15 @@ For a two-dimensional example, the same `c = [2, 3]` can produce `[2, 3]` and `[
 
 **MLA 共享每个 Token 的低维表示，各个 head 保留不同的投影和 Attention 权重。** 投影矩阵是该层的模型参数，所有 Token 共用；缓存只需保存各 Token 的潜在表示，不需要为每个 Token 再存一份矩阵。
 
+Split W_UK into output-column blocks. Head i uses its own `W_UK^(i): [512, 128]`, and V works the same way. Different head parameters produce different results from the shared input.
+
+For a two-dimensional example, the same `c = [2, 3]` can produce `[2, 3]` and `[5, -1]` through different projections.
+
 **MLA shares each token's latent while retaining head-specific projections and attention weights.** Projection matrices are layer parameters reused across tokens. The cache stores token-specific latents, without duplicating those matrices per token.
 
 #### 6.2.4 位置分支单独生成 64 维 Key
 
 另一个分支从 x_t 生成 64 维向量，再按位置 t 应用 RoPE，得到 `k_t^R: [64]`。这个位置 Key 在全部 128 个 head 之间共享；各 head 的完整 Key 由自己的 128 维内容部分与这个 64 维位置部分拼接。
-
-A separate branch projects x_t to 64 dimensions and applies RoPE at position t, producing `k_t^R: [64]`. This positional key is shared across all 128 heads. Each complete key concatenates its head-specific 128-dimensional content with this shared 64-dimensional position component.
 
 ```math
 k_t^R=\mathrm{RoPE}_t(x_tW_{KR}),\qquad
@@ -481,6 +479,8 @@ k_{t,i}=[k_{t,i}^C;k_t^R]\in\mathbb{R}^{192}
 ```
 
 因此，一个 Token 写入紧凑缓存的内容是 **`c_t^KV [512] + k_t^R [64]`**。64 维位置 Key 只保存一份，内容 K/V 通过共享 latent 表示。
+
+A separate branch projects x_t to 64 dimensions and applies RoPE at position t, producing `k_t^R: [64]`. This positional key is shared across all 128 heads. Each complete key concatenates its head-specific 128-dimensional content with this shared 64-dimensional position component.
 
 One token therefore contributes **`c_t^KV [512] + k_t^R [64]`** to the compact cache. The positional key is stored once, and the shared latent represents content K/V. [DeepSeek-V3 technical report, §2.1.1](https://arxiv.org/html/2412.19437v2#S2.SS1.SSS1)
 
@@ -511,8 +511,6 @@ q_{t,i}=[q_{t,i}^C;q_{t,i}^R]
 
 先按概念展开 K/V。对于当前 Token t 的第 i 个 head，分别计算内容分数和位置分数，相加后缩放，再对可见位置 j 做 softmax。当前 Token 自己的 K/V 也包含在可读取位置中。
 
-Consider the conceptually expanded K/V first. For head i of the current token t, add content and positional scores, apply scaling, and normalize over visible key positions j. Visible positions include the current token's own K/V.
-
 ```math
 s_{t,j,i}=\alpha\left[q_{t,i}^C(k_{j,i}^C)^T+q_{t,i}^R(k_j^R)^T\right]+M_{t,j},\qquad
 a_{t,j,i}=\mathrm{softmax}_{j}(s_{t,j,i})
@@ -520,13 +518,13 @@ a_{t,j,i}=\mathrm{softmax}_{j}(s_{t,j,i})
 
 基础缩放为 `α = 1/√192`，对应每头 Q/K 的 `128 + 64` 维；具体实现可按长上下文 RoPE 方案调整该系数。Mask 在可见位置为 0，不可见位置为负无穷。
 
+Consider the conceptually expanded K/V first. For head i of the current token t, add content and positional scores, apply scaling, and normalize over visible key positions j. Visible positions include the current token's own K/V.
+
 The base scale is `α = 1/√192`, matching the `128 + 64` dimensions per Q/K head. Implementations may adjust it for long-context RoPE scaling. The mask is zero at visible positions and negative infinity at blocked positions.
 
 #### 6.3.2 输出宽度由 V 决定
 
 每个 head 用自己的权重组合 128 维的 V，因此输出也是 128 维。128 个 head 拼接成 16384 维，再通过 W_O 映射回 7168 维，供残差连接和后续层使用。
-
-Each head combines 128-dimensional values using its own weights, producing a 128-dimensional output. Concatenating 128 heads yields 16384 dimensions; W_O maps that back to 7168 for the residual connection and subsequent layers.
 
 ```math
 o_{t,i}=\sum_{j\leq t}a_{t,j,i}v_{j,i}\in\mathbb{R}^{128},\qquad
@@ -536,6 +534,8 @@ W_O\in\mathbb{R}^{16384\times7168}
 
 `24576 = 128 × 192` 是 Q/K 的展开宽度，`16384 = 128 × 128` 是各 head 输出的拼接宽度，`576 = 512 + 64` 是每个历史位置的紧凑缓存宽度。
 
+Each head combines 128-dimensional values using its own weights, producing a 128-dimensional output. Concatenating 128 heads yields 16384 dimensions; W_O maps that back to 7168 for the residual connection and subsequent layers.
+
 The widths refer to distinct objects: 24576 for expanded Q/K, 16384 for concatenated head outputs, and 576 for each cached history position.
 
 #### 6.3.3 缓存量随上下文如何增长
@@ -544,16 +544,16 @@ The widths refer to distinct objects: 24576 for expanded Q/K, 16384 for concaten
 
 下表均为**单层、单样本、BF16 每个数 2 字节**的逻辑缓存，不含模型权重和计算工作区。
 
-Use a naive baseline that caches each head's full 192-dimensional K and 128-dimensional V. It stores `128 × (192 + 128) = 40960` values per position, including repeated copies of the shared positional key. MLA stores 576, about one seventy-first as many.
-
-The table gives logical cache sizes for **one layer, one sample, and BF16 at two bytes per value**, excluding model weights and workspace.
-
 | 表示 / Representation | 每 Token / Per token | 1000 Token | 4096 Token |
 | --- | --- | --- | --- |
 | 完整展开 K/V / Fully expanded K/V | 80 KiB | 78.125 MiB | 320 MiB |
 | MLA 紧凑缓存 / Compact MLA | 1.125 KiB | 约 / About 1.099 MiB | 4.5 MiB |
 
 这个比例描述相同 head 尺寸下两种缓存表示的存储量；实际推理速度还取决于计算路径、访存、batch 和硬件。
+
+Use a naive baseline that caches each head's full 192-dimensional K and 128-dimensional V. It stores `128 × (192 + 128) = 40960` values per position, including repeated copies of the shared positional key. MLA stores 576, about one seventy-first as many.
+
+The table gives logical cache sizes for **one layer, one sample, and BF16 at two bytes per value**, excluding model weights and workspace.
 
 This ratio compares storage representations at the same head dimensions. Inference speed also depends on computation strategy, memory access, batch size, and hardware.
 
@@ -578,14 +578,14 @@ P_{latent}\lt P_{direct}\ \text{when}\ r\lt \frac{mn}{m+n}
 
 Q 的直接投影宽度为 24576，低秩中间维度为 1536。内容 K 和 V 的输出宽度各为 16384，共享 512 维中间表示。下面只计线性权重；KV 两个方案都不计独立的位置 Key 分支，归一化参数和 bias 也不计入。
 
-The direct query output width is 24576, with latent width 1536 in the factorized path. Content K and V each have output width 16384 and share a 512-dimensional latent. The comparison counts linear weights only; both KV alternatives exclude the positional-key branch, and normalization parameters and biases are omitted.
-
 | 路径 / Path | 直接投影 / Direct projection | 低秩投影 / Low-rank projection | 减少 / Reduction |
 | --- | --- | --- | --- |
 | Q | `7168 × 24576 = 176,160,768` | `7168 × 1536 + 1536 × 24576 = 48,758,784` | 约 / About 72.3% |
 | K 内容与 V / Content K and V | `7168 × (16384 + 16384) = 234,881,024` | `7168 × 512 + 512 × (16384 + 16384) = 20,447,232` | 约 / About 91.3% |
 
 Q 路径的线性投影乘加次数同样约降到直接方案的 1/3.61。这个比较只覆盖投影运算；Attention 的整体成本还包含读取历史、匹配和加权求和。
+
+The direct query output width is 24576, with latent width 1536 in the factorized path. Content K and V each have output width 16384 and share a 512-dimensional latent. The comparison counts linear weights only; both KV alternatives exclude the positional-key branch, and normalization parameters and biases are omitted.
 
 The query projections likewise use about 27.7% of the direct path's multiply-accumulate operations. This concerns projection work; Attention also includes reading history, matching, and weighted aggregation.
 
@@ -621,8 +621,6 @@ Both paths reduce the projection parameters and multiply-accumulate counts above
 
 若每一步都把全部历史 latent 展开成 K/V，虽然持久缓存较小，仍会产生临时张量和重复投影。内容 K 的生成是线性的，可以利用矩阵乘法结合律，把历史 K 的展开转移到当前 Query 上。
 
-Re-expanding every historical latent at every step would preserve compact storage but introduce temporary tensors and repeated projections. Content-key generation is linear, so associativity can move its projection from historical keys to the current query.
-
 ```math
 k_{j,i}^C=c_j^{KV}W_{UK}^{(i)},\qquad W_{UK}^{(i)}\in\mathbb{R}^{512\times128}
 ```
@@ -639,13 +637,13 @@ q_{t,i}^C(k_{j,i}^C)^T
 
 对每个 head，当前内容 Query 从 128 维变成 512 维，随后直接与缓存的 `[T, 512]` latent 匹配。历史内容 K 无需先展开为 `[T, 128]`。每个 head 的变换和匹配权重仍各不相同。
 
+Re-expanding every historical latent at every step would preserve compact storage but introduce temporary tensors and repeated projections. Content-key generation is linear, so associativity can move its projection from historical keys to the current query.
+
 For each head, the current content query transforms from 128 to 512 dimensions and matches the cached `[T, 512]` latents directly. Historical content keys need not first expand to `[T, 128]`. Heads retain distinct query transformations and attention weights.
 
 #### 6.5.2 先聚合 Latent 再做 V 投影
 
 V 也由 latent 线性生成，因此可先对 latent 加权求和，得到当前 head 的 512 维聚合表示，再投影成 128 维输出。这样就无需为所有历史位置显式生成完整 V。
-
-V is also a linear projection of the latent. First aggregate latents into a 512-dimensional representation for the current head, then project it into the 128-dimensional output. This avoids explicitly producing V for every history position.
 
 ```math
 \begin{aligned}
@@ -658,6 +656,8 @@ o_{t,i}
 
 V 投影还可以与 W_O 的对应分块组合，形成输出侧的权重吸收。实际实现也可以先得到各 head 的 128 维输出，再调用 W_O；两者的数学重排不要求采用同一种 kernel。
 
+V is also a linear projection of the latent. First aggregate latents into a 512-dimensional representation for the current head, then project it into the 128-dimensional output. This avoids explicitly producing V for every history position.
+
 The value projection can also combine with its corresponding W_O block for output-side weight absorption. Implementations may instead produce each 128-dimensional head output before applying W_O. The algebra permits different kernel strategies.
 
 #### 6.5.3 为什么需要 Decoupled RoPE
@@ -666,15 +666,15 @@ The value projection can also combine with its corresponding W_O block for outpu
 
 MLA 因此将内容与位置分开：内容分数直接读取 512 维 latent；位置分数由当前各 head 的 64 维 RoPE Query 与缓存的共享 RoPE Key 单独计算。两部分相加后，沿用原来的分数缩放和 softmax。
 
-The rearrangement relies on a fixed, position-independent W_UK. If historical RoPE rotations were inserted into the content-key path, those rotations would vary with j and prevent a single transformation determined only by the current query.
-
-Decoupled RoPE separates the two paths: content scores read 512-dimensional latents directly, while positional scores use each current head's 64-dimensional RoPE query and the shared cached positional key. The two scores are added before the original scaling and softmax. [DeepSeek-V2, Decoupled RoPE](https://arxiv.org/html/2405.04434v5#S2.SS1.SSS3)
-
 ```math
 s_{t,j,i}=\alpha\left[\widetilde q_{t,i}(c_j^{KV})^T+q_{t,i}^R(k_j^R)^T\right]+M_{t,j}
 ```
 
 变换后内容 Query 是 512 维，位置分量是 64 维，但这只是等价重排；缩放系数仍由原始 Q/K 的 192 维计算和模型配置决定，不能改用 `1/√576`。
+
+The rearrangement relies on a fixed, position-independent W_UK. If historical RoPE rotations were inserted into the content-key path, those rotations would vary with j and prevent a single transformation determined only by the current query.
+
+Decoupled RoPE separates the two paths: content scores read 512-dimensional latents directly, while positional scores use each current head's 64-dimensional RoPE query and the shared cached positional key. The two scores are added before the original scaling and softmax. [DeepSeek-V2, Decoupled RoPE](https://arxiv.org/html/2405.04434v5#S2.SS1.SSS3)
 
 The transformed query uses 512 content and 64 positional dimensions, but this is an equivalent rearrangement. Scaling remains tied to the original 192-dimensional Q/K computation and model configuration; it must not become `1/√576`.
 
@@ -684,19 +684,17 @@ The transformed query uses 512 content and 64 positional dimensions, but this is
 
 DeepSeek 的参考实现分别提供 naive 与 absorb 路径：前者缓存展开 K/V，后者缓存归一化后的 KV latent 和位置 Key，并直接完成内容匹配和 latent 聚合。
 
+单步 Decode 的完整运算顺序见[附录 A.3](#a3-mla-单步-decode-伪代码)。
+
 The expanded and rearranged computations are equivalent in exact arithmetic; floating-point order may introduce small differences. Rearrangement avoids generating and storing full historical K/V, while the transformed content matching dimension increases from 128 to 512. Prefill, Decode, batch size, and hardware influence implementation choices.
 
 DeepSeek's reference implementation provides naive and absorb paths. The former caches expanded K/V; the latter caches normalized KV latents and positional keys and computes scores and latent aggregation directly. [Official inference implementation, MLA](https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/model.py)
-
-单步 Decode 的完整运算顺序见[附录 A.3](#a3-mla-单步-decode-伪代码)。
 
 See [Appendix A.3](#a3-mla-单步-decode-伪代码) for the complete single-step Decode computation.
 
 ### 6.6 与 Qwen GQA 的异同
 
 GQA 通过减少 KV head 数量来共享 K/V；同组 Q heads 的 Query 不同，Attention 权重和输出仍可不同。Qwen 的 `512 = 4 × 128` 是分组后的 K 或 V，直接用于 Attention，不经过 MLA 式的 latent 升维。MLA 共享的是产生内容 K/V 的 latent，各个 head 使用不同的投影；DeepSeek 的 512 维 latent 同时生成内容 K 和 V，另加一份 64 维位置 Key。
-
-GQA reduces the number of KV heads, with queries, weights, and outputs remaining distinct within each group. Qwen's `512 = 4 × 128` is the grouped K or V used directly by Attention, without MLA-style latent up-projection. MLA shares the latent that produces content K/V while retaining head-specific projections. DeepSeek's 512-dimensional latent generates both content K and V, accompanied by one 64-dimensional positional key.
 
 | 项目 / Property | Qwen3-30B-A3B GQA | DeepSeek-V3 MLA |
 | --- | --- | --- |
@@ -708,6 +706,8 @@ GQA reduces the number of KV heads, with queries, weights, and outputs remaining
 | Q 是否先低秩压缩 / Low-rank query path | 否，直接投影 / No, direct projection | 是，中间 1536 维 / Yes, via 1536 dimensions |
 
 1024 与 576 分别是这两个模型每层、每 Token 的缓存元素量。模型规模和计算路径不同，这两个数本身不能用来比较整体推理速度。
+
+GQA reduces the number of KV heads, with queries, weights, and outputs remaining distinct within each group. Qwen's `512 = 4 × 128` is the grouped K or V used directly by Attention, without MLA-style latent up-projection. MLA shares the latent that produces content K/V while retaining head-specific projections. DeepSeek's 512-dimensional latent generates both content K and V, accompanied by one 64-dimensional positional key.
 
 The values 1024 and 576 describe cached elements per token per layer in these two models. Their model scales and computation paths differ, so these counts alone do not compare overall inference speed.
 

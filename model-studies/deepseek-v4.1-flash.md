@@ -1,157 +1,132 @@
 # DeepSeek V4.1 Flash
 
-DeepSeek V4.1 Flash 的重点是：**用 CED 减少长输入的 Prefill 计算，用 CSA2 减少 KV 存储和重复索引。**
+**理解主线：少数 Full 层建立全局 KV，多层共享它；Indexer 决定读哪些条目，各层自己的 Q 和局部 SWA 决定怎样继续更新 Hidden State。**
 
-DeepSeek V4.1 Flash focuses on **reducing long-input Prefill computation with CED, and reducing KV storage and repeated indexing with CSA2**.
+**Core idea: a few Full layers create global KV for many layers to share. Indexers select entries; each layer's own Q and local SWA drive the next hidden-state update.**
 
-## 整体架构：20 层 Encoder + 20 层 Decoder
+- [1 整体骨架](#1-整体骨架)
+- [2 核心注意力：一份全局池如何供多层使用](#2-核心注意力一份全局池如何供多层使用)
+- [3 缓存为什么变小](#3-缓存为什么变小)
+- [4 本模型如何额外优化 Prefill](#4-本模型如何额外优化-prefill)
 
-```text
-文本 / 图像 → Embedding → Causal Encoder（20 层）→ Decoder（20 层）→ LM Head → Token 概率
-                                  └─ 最后一层 Hidden States → Decoder 的全局 KV
+## 1 整体骨架
+
+模型依次执行 **20 层 Causal Encoder → 20 层 Decoder → LM Head**。两部分都遵守因果约束；Decode 时，当前 Token 穿过全部 40 层。关键连接是：**Decoder 的全局 KV 从最终 Encoder 输出生成，而局部 SWA 仍从各层自己的输入生成。**
+
+![整体架构：20 层 Causal Encoder 与 20 层 Decoder，以及 Full、Reindex、Reuse 的层排列](images/deepseek-v4.1-flash-layers.svg)
+
+先执行左列 Encoder，再执行右列 Decoder；每列自上而下。`→` 表示层执行顺序与 Hidden State 传递，`×N` 表示串行执行 N 个独立 Block。Reuse 沿用最近 Full / Reindex 选出的 Top-512 编号；图中箭头不表示全局 KV 的来源。
+
+全模型的 **4 份全局 KV 来源**分别位于 Encoder 第 3、9、15 层和 Decoder 第 21 层，各组内共享；40 层各自保留局部 SWA。前两层只做 SWA，之后 38 层同时读取局部与全局 KV。每个 Block 还包含 MoE。
+
+The model runs **20 Causal Encoder layers → 20 Decoder layers → LM Head**. Both halves obey causality; each Decode token traverses all 40 layers. **Decoder global KV is projected from the final Encoder output, while local SWA is generated from each layer's own input.**
+
+Run the Encoder column first, then the Decoder column, top to bottom within each. `→` shows execution order and hidden-state flow; `×N` denotes N sequential, independent blocks. Reuse inherits Top-512 indices from the latest Full / Reindex. The arrows do not indicate global-KV ownership.
+
+The **four global KV sources** are Encoder layers 3, 9, 15 and Decoder layer 21, shared within their groups. All 40 layers maintain independent local SWA windows. The first two layers use SWA only; the other 38 read both local and global KV. Every block also contains MoE.
+
+## 2 核心注意力：一份全局池如何供多层使用
+
+固定当前 Token，看它穿过 Decoder 的实际第 21–28 层。**左侧是共享的全局 KV 池，右侧是每层独立的 128 条 SWA，中间是逐层更新的 Hidden State。** 例中有 10000 个可见位置，因此 Decoder 全局池有 10000 条记录。
+
+![Full 建池并选择，Reuse 沿用选择，Reindex 在同一池中重选；各层用自己的 Q 和 SWA 更新 Hidden State](images/deepseek-v4.1-flash-cache-reuse-overview.svg)
+
+沿中间主线看：Full 建池并选出 Top-512 编号 I_A；后续 Reuse 同时复用池和 I_A。Reindex 共用这个池，用自己的 Indexer 重选 I_B，随后 Reuse 沿用 I_B。**三种层都用自己的主 Q，对“512 条所选全局 KV + 本层 128 条 SWA KV”共同做 Attention，再经输出投影、残差路径和 MoE 更新 Hidden State。**
+
+这里有三个容易混淆的边界：**Full 也做稀疏 Attention；Top-512 是读取量，未选条目继续保存；Reuse 仍执行本层计算。** 局部与全局可以覆盖相同的 Token 位置，两路表示共同参加一次 Attention 归一化。
+
+长上下文时，Decoder 的首个 Full 层还建立一个较大的候选池，后续 Reindex 只在其中重选 Top-512。候选池最多由 `2048 个块 × 8 个位置 = 16384 个位置` 组成，用来减少重复索引的计算；它与最终读取的 512 条不是同一数量。
+
+Hold the current token fixed through actual Decoder layers 21–28. **The left is one shared global KV pool, the right is each layer's own 128-entry SWA window, and the middle is the evolving hidden state.** This example has 10000 visible positions and 10000 Decoder global entries.
+
+Follow the central path: Full creates the pool and selects Top-512 indices I_A; following Reuse layers share both. Reindex shares the pool but runs its own Indexer to select I_B, which subsequent Reuse layers inherit. **All three modes use their own main Q to attend jointly to 512 selected global entries and 128 layer-local SWA entries, then update the hidden state through output projection, residual processing, and MoE.**
+
+Three distinctions matter: **Full still uses sparse Attention; Top-512 counts entries read while unselected entries remain cached; Reuse still performs layer computation.** Local and global entries may cover overlapping token positions and participate in one Attention normalization.
+
+For long contexts, the first Decoder Full layer also builds a larger candidate pool, restricting later Reindex searches. Up to `2048 blocks × 8 positions = 16384 positions` can enter this pool, reducing repeated indexing work; the final read remains Top-512.
+
+## 3 缓存为什么变小
+
+### 3.1 少存全局条目，也少存跨层副本
+
+沿用 **10000 个 Token 位置**的例子。Encoder 的每个全局来源把相邻两个位置的投影聚成一条，Decoder 的来源按 1:1 保存。**压缩改变 KV 记录数，原始 Token 位置数仍为 10000。**
+
+| 缓存 / Cache | 保存数量 / Stored entries | 共享范围 / Sharing scope |
+| --- | --- | --- |
+| Encoder 全局 KV / Global KV | `3 个来源 × 每份 5000 条` / 3 sources × 5000 | 每份供本组 Full 与后续 5 个 Reuse 层使用 / Each serves its Full layer and next 5 Reuse layers |
+| Decoder 全局 KV / Global KV | `1 个来源 × 10000 条` / 1 source × 10000 | 第 21–40 层共用 / Shared by layers 21–40 |
+| 局部 SWA / Local SWA | `40 层 × 每层 128 条` / 40 layers × 128 | 各层独立维护 / Independent per layer |
+
+每条全局记录包含 **512 维主 KV + 128 维 indexer K**。主 KV 的同一份 512 维数据直接充当 K 和 V，64 个主 Query heads 共同读取；既不为每个 head 复制，也不另存一份 V。512 维已包含 64 维 RoPE 分量。
+
+Keep the same **10000 token positions**. Each Encoder global source pools adjacent pairs into one entry; the Decoder source stores one per position. **Compression changes KV-entry counts while preserving the original 10000 token positions.**
+
+Each global record contains **512-dimensional main KV and a 128-dimensional indexer key**. The same main vector serves as K and V for all 64 query heads, without per-head copies or a separate V copy. Its 512 dimensions already include 64 RoPE dimensions.
+
+### 3.2 FP4 再减少每条记录的字节数
+
+全局主 KV 和 indexer K 都量化为 FP4；量化 scale 也占空间。局部 SWA 使用 FP8。
+
+| 全局记录的数据 / Global record data | 数值 / Values | Scale | 合计 / Total |
+| --- | --- | --- | --- |
+| 主 KV / Main KV | `512 × 0.5 = 256 B` | `512 / 16 × 1 = 32 B` | 288 B |
+| indexer K | `128 × 0.5 = 64 B` | `128 / 32 × 1 = 4 B` | 68 B |
+| 每条记录 / Per record | 320 B | 36 B | **356 B** |
+
+按原始 Token、跨全模型摊销，全局缓存约为 **890 Bytes/Token**：
+
+```math
+B_{\mathrm{global}}(T)=\left(3\left\lfloor T/2\right\rfloor+T\right)\times356
+\approx T\times(3/2+1)\times356=890T\ \mathrm{Bytes}
 ```
 
-这里的 Causal Encoder 也遵守因果约束，每个位置只能看到自己和之前的内容。40 层都由 Transformer Block 组成，各层有自己的可训练参数。
+T=10000 时，全局缓存为 `25000 × 356 = 8,900,000 B`。这个口径只包含全局主 KV 与 indexer K；局部 SWA、索引管理、未满压缩组的临时状态、模型权重和运行激活另计。
 
-CED（Causal Encoder–Decoder）的关键是：**Decoder 的全局 KV 由 Encoder 最后一层的输出投影得到。**
+**权重与缓存的区别：** 投影矩阵、Norm 的 γ、Indexer 等模块参数是训练得到的模型权重；主 KV、indexer K、SWA KV 是随输入产生的缓存数据。Q 和 Attention 权重用于当前计算，通常不存入历史 KV Cache。
 
-- **Prefill：** 长 Prompt 主要经过 Encoder，并由其输出构建 Decoder 的全局 KV；Decoder 只需回放末尾一小段来准备局部 SWA 状态。
-- **Decode：** 每个新 Token 依次经过 Encoder 和 Decoder，利用已有 KV 生成下一个 Token。
+Global main KV and indexer K use FP4, including additional storage for quantization scales. Local SWA uses FP8.
 
-主干参数为 552B，另有 196B Engram 条件记忆参数；Prefill / Decode 每个 Token 的激活参数分别约为 8B / 16B。[官方模型卡](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash)
+As shown in the formula above, amortized per original token across the model, global caching costs approximately **890 Bytes/Token**.
 
-The backbone runs Embedding → 20-layer Causal Encoder → 20-layer Decoder → LM Head → token probabilities. The final Encoder Hidden States also supply the Decoder's global KV.
+For T=10000, global caching occupies `25000 × 356 = 8,900,000 B`. This counts only global main KV and indexer K; local SWA, index management, partial compression groups, model weights, and runtime activations are additional.
 
-The Causal Encoder obeys causal visibility. All 40 layers are Transformer Blocks with their own trainable parameters.
+**Weights versus caches:** projection matrices, Norm gains, and Indexer parameters are learned model weights. Main KV, indexer K, and SWA KV are input-dependent cached data. Queries and Attention weights serve current computation and are normally absent from historical KV caches.
 
-The key CED design is that **Decoder global KV is projected from the final Encoder output**.
+## 4 本模型如何额外优化 Prefill
 
-- **Prefill:** most long-prompt computation runs through the Encoder, whose outputs build Decoder global KV. The Decoder replays a short suffix to prepare local SWA states.
-- **Decode:** each new token passes through both Encoder and Decoder, reusing existing KV to predict the next token.
+### 4.1 在第 20 层输出后准备完整的 Decoder 全局 KV
 
-The backbone has 552B parameters plus 196B Engram parameters. Activated parameters per token are about 8B for Prefill and 16B for Decode.
+V4.1 的额外收益来自缓存依赖：**第 21–40 层共用的全局 KV，直接从所有位置的最终 Encoder 输出生成。** 历史位置无需继续经过后 20 层的完整 Attention 和 MoE，才能提供这些全局 KV。
 
-## 40 层怎么排列
+例如处理 10000 个输入位置：先让全部位置经过前 20 层，再投影生成完整 Decoder 全局 KV。随后，后 20 层只处理末尾短后缀，准备局部 SWA 并得到最后位置的最终输出。
 
-![DeepSeek V4.1 Flash 的层排列](images/deepseek-v4.1-flash-layers.svg)
-
-每一项都是串行堆叠的 Block；`×N` 表示连续执行 N 层，每层有各自的参数。
-
-- **Encoder：** `SWA ×2 +（Full + Reuse ×5）×3 = 20 层`。
-- **Decoder：** `Full + Reuse ×3 +（Reindex + Reuse ×3）×4 = 20 层`。
-
-架构图中的 `CSA2(2, Full)`，括号里的 `2` 是 KV 的序列压缩比；外面的 `×3`、`×5` 才是层的重复次数。Encoder 的 CSA2 压缩比为 2，Decoder 为 1。[技术报告 §4.2.1](https://arxiv.org/html/2609.19969v1#S4.SS2.SSS1)
-
-Blocks execute serially. An external `×N` means N consecutive blocks, each with its own parameters.
-
-- **Encoder:** `SWA ×2 + (Full + Reuse ×5) ×3 = 20 layers`.
-- **Decoder:** `Full + Reuse ×3 + (Reindex + Reuse ×3) ×4 = 20 layers`.
-
-In `CSA2(2, Full)`, the internal 2 is the sequence compression ratio, while external repetition counts describe layers. Encoder CSA2 uses ratio 2; Decoder CSA2 uses ratio 1.
-
-## Attention：SWA 看近处，CSA2 找远处
-
-**SWA（Sliding-Window Attention）** 只关注最近的 128 个 Token，保留局部细节。每层都有自己的 SWA；最前面的两层只使用 SWA。
-
-其余层使用 CSA2（Compressed Sparse Attention 2），把两类信息一起交给 Attention：
-
-| 分支 | 读取什么 | 作用 |
+| Block 计算范围 / Block execution | 前 20 层 / First 20 layers | 后 20 层 / Last 20 layers |
 | --- | --- | --- |
-| 局部 SWA | 最近 128 个 Token 的本层 KV | 保留连续的局部上下文 |
-| 全局稀疏分支 | Indexer 选出的 Top-512 个全局 KV 条目 | 从较远的上下文中查找有用信息 |
+| 完整前向 / Full forward | 10000 个位置 / positions | 10000 个位置 / positions |
+| 优化 Prefill / Optimized Prefill | 10000 个位置 / positions | 最近 128 个位置 / latest positions |
 
-Indexer 是负责筛选条目的轻量模块；主 Attention 再用自己的 Q 对选中的 KV 计算权重和输出。
+**最后一个输入位置仍完整经过 40 层，用于预测第一个新 Token。** 省去的是大量旧位置在后半段的完整计算，并未缩短最后位置的计算深度。全局 KV 的投影与建缓存仍需执行。
 
-**Top-512 指 KV 条目。** Encoder 将每 2 个 Token 压缩成一个全局条目；Decoder 的压缩比为 1，序列长度不压缩。
+V4.1 exploits a specific cache dependency: **global KV shared by layers 21–40 is projected directly from final Encoder states at all positions.** Historical positions need not execute full Decoder Attention and MoE to supply this global cache.
 
-CSA2 同时做三件事：压缩全局 KV、跨层共享全局 KV、跨层复用 Top-K 选择。[技术报告 §2.3](https://arxiv.org/html/2609.19969v1#S2.SS3)
+For 10000 input positions, all positions first traverse the Encoder, then generate the complete Decoder-global cache. The Decoder processes only a short suffix to prepare local SWA and obtain the final input position's output.
 
-SWA attends to the most recent 128 tokens and preserves local details. Every layer has local SWA; the first two layers use only SWA.
+**The final input position still traverses all 40 layers to predict the first new token.** Savings come from skipping full Decoder computation for many older positions, while global-KV projection and cache construction still execute.
 
-The remaining layers use CSA2, combining local SWA KV with Top-512 global KV entries selected by a lightweight Indexer. The main Attention uses its own Q to weight the selected KV.
+### 4.2 用 128 个位置的近似回放准备 SWA
 
-**Top-512 refers to KV entries.** The Encoder compresses every two tokens into one global entry; the Decoder uses ratio 1 with no sequence compression.
+后半段每层仍有自己的局部 SWA，因此不能只准备全局 KV 就结束。**Decoder SWA Bounded Replay** 把回放长度设为窗口长度 128，让最后 128 个位置依次经过后 20 层，生成各层局部缓存。
 
-CSA2 combines global KV compression, cross-layer global KV sharing, and cross-layer Top-K index reuse.
+这里的 **128 是继续计算 Hidden States 的位置数**。每个回放位置在各层仍按 Full / Reindex / Reuse 规则读取 **Top-512 全局 KV + 最多 128 条本层 SWA KV**。较早位置不继续跑后半段，但它们由 Encoder 输出生成的全局 KV 仍可被选中；历史并未只剩最后 128 个 Token。
 
-## Full、Reindex、Reuse 的区别
+多层 SWA 的依赖会向前扩展；若追求与完整前向相同的局部状态，需要处理更长的后缀。只回放 128 个位置会截断片段边界之前的局部依赖，**因此它是近似策略，不保证与完整前向数学等价**。
 
-全局 KV 包括供主 Attention 读取的 **main KV**，以及供 Indexer 打分的 **indexer K**。
+正常连续 Decode 仍只新算当前一个位置，并经过完整 40 层；每层 SWA 增量更新，不会每步再重算 128 个历史位置。局部缓存丢失或需要恢复时，也可通过 Bounded Replay 准备窗口。
 
-| 当前层的工作 | Full | Reindex | Reuse |
-| --- | --- | --- | --- |
-| main KV、indexer K | 新建 | 复用最近 Full 层的结果 | 复用最近 Full 层的结果 |
-| indexer Q | 计算 | 计算 | 无需计算 |
-| Top-512 索引 | 重新选择 | 重新选择 | 沿用最近 Full / Reindex 层的选择 |
-| 主 Attention 的 Q | 自己计算 | 自己计算 | 自己计算 |
-| SWA KV、Attention 输出 | 自己计算 | 自己计算 | 自己计算 |
+Each Decoder layer still needs its own local SWA. **Decoder SWA Bounded Replay** sets the replay length to the 128-position window size and runs this suffix through the Decoder to prepare its local caches.
 
-- **Full：** 建 KV，再选条目，执行完整的 CSA2 路径；主 Attention 仍然是稀疏的。
-- **Reindex：** 使用同一份 KV，换一个 Query 重新挑选条目。
-- **Reuse：** 使用同一份 KV 和同一份条目选择，用本层的 Q 重新计算 Attention。
+Here, **128 counts positions whose hidden states are computed**. Each replayed position still reads **Top-512 global entries and up to 128 local SWA entries**, following Full / Reindex / Reuse rules. Older positions remain accessible through global KV generated from Encoder states.
 
-所以 Reuse 层仍然执行 Attention、MoE 等计算。共享的是中间 KV 和索引，各层仍有自己的 Query、输出投影和专家参数。[技术报告 §2.3.1](https://arxiv.org/html/2609.19969v1#S2.SS3.SSS1)
+Local dependencies extend backward across SWA layers. Exact reconstruction would require a longer suffix; replaying only 128 positions truncates local dependencies before the replay boundary. **This is an approximation, not a mathematically identical full forward pass.**
 
-Decoder 还使用**分层索引**：第一个 Full 层搜索整个可见上下文，并建立较大的候选池；后续 Reindex 层只在候选池中重选 Top-512。候选池最多有 16,384 个位置，与最终用于 Attention 的 512 个条目分开。[技术报告 §2.3.2](https://arxiv.org/html/2609.19969v1#S2.SS3.SSS2)
-
-Global KV includes **main KV** for Attention and **indexer K** for selection scoring.
-
-| Current-layer work | Full | Reindex | Reuse |
-| --- | --- | --- | --- |
-| main KV and indexer K | Create | Share the latest Full layer's result | Share the latest Full layer's result |
-| indexer Q | Compute | Compute | Omit |
-| Top-512 indices | Select afresh | Select afresh | Reuse the latest Full / Reindex selection |
-| Main Attention Q | Compute locally | Compute locally | Compute locally |
-| SWA KV and Attention output | Compute locally | Compute locally | Compute locally |
-
-**Full** builds KV and selects entries, executing the complete CSA2 path while retaining sparse Attention. **Reindex** shares KV but uses a new indexer query to reselect entries. **Reuse** shares both KV and indices, then computes Attention using its own Q.
-
-Reuse layers still execute Attention and MoE. They share intermediate KV and indices while retaining their own Query, output projections, and expert parameters.
-
-The Decoder also uses hierarchical indexing: its first Full layer searches the visible context and builds a candidate pool. Later Reindex layers select their own Top-512 within that pool, which contains up to 16,384 positions.
-
-## Top-512 复用了，最近 128 个还要重算吗
-
-**跨层复用针对全局 KV 和 Top-512 索引。局部 SWA KV 仍由每层分别维护。**
-
-正常逐 Token Decode 时，每层保留窗口中的历史 KV，只计算当前 Token 的新 KV，并移出窗口外的旧条目。因此，同一步里各层使用各自的局部 KV；连续生成时也能沿用本层前一步留下的缓存。
-
-**SWA Bounded Replay** 用于准备或恢复缺失的 SWA 状态：只回放最近 128 个 Token，近似重建局部 KV。这样可以省去把 SWA KV 长期保存到 SSD 的开销。它发生在缓存准备 / 恢复时，正常 Decode 继续增量维护窗口。[技术报告 §3.2.2](https://arxiv.org/html/2609.19969v1#S3.SS2.SSS2)
-
-**Cross-layer reuse applies to global KV and Top-512 indices. Each layer maintains its own local SWA KV.**
-
-During ordinary token-by-token Decode, a layer keeps KV within its window, computes new KV for the current token, and evicts entries outside the window. Different layers use different local KV, while each layer reuses its own previous-step cache.
-
-**SWA Bounded Replay** prepares or recovers missing local states by replaying only the most recent 128 tokens and approximately reconstructing SWA KV. This avoids persistent SSD storage for SWA KV. Ordinary Decode continues updating the window incrementally.
-
-## MoE 与反向传播
-
-每个 Block 的 FFN 使用 MoE：**1 个共享专家 + 384 个路由专家，每个 Token 选择其中 6 个路由专家。** Router 负责给专家打分，选中的专家处理该 Token，再聚合输出。[官方模型配置](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash/blob/main/config.json)
-
-从单个 Token 看，梯度主要沿这些路径传播：
-
-| 模块 | 梯度如何传播 |
-| --- | --- |
-| 选中的 6 个专家、共享专家 | 通过各自的计算路径得到梯度 |
-| 未选中的专家 | 没有来自该 Token 的专家计算梯度；Batch 中其他 Token 可能选中它们 |
-| Router | 通过选中专家的可微路由权重得到梯度；离散 Top-K 选择本身不直接求导 |
-| 本层 Query、SWA、输出投影、Norm 等 | 沿本层计算路径得到梯度 |
-| 跨层共享的全局 KV | 使用它的多个层贡献的梯度汇合，再传回生成 KV 的投影和输入 |
-
-对 Decoder 的共享全局 KV，这条路径还会回到 **Encoder 最后一层的输出**。推理时缓存 KV 用来省计算；训练时共享 KV 的计算图仍然需要保留相应的梯度路径。
-
-其余模块先记住作用即可：**Single-Pass mHC** 混合多条残差流，**Engram** 提供按 Token 组合查找的条件记忆，**DSpark** 用推测解码加速生成。[官方模型卡](https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash)
-
-Every Block uses an MoE FFN with **1 shared expert and 384 routed experts, selecting 6 routed experts per token**. The Router scores experts, selected experts process the token, and their outputs are aggregated.
-
-| Component | Gradient path for one token |
-| --- | --- |
-| Selected 6 experts and shared expert | Receive gradients through their computation |
-| Unselected experts | No expert-computation gradient from this token; other batch tokens may select them |
-| Router | Receives gradients through differentiable selected routing weights; discrete Top-K itself is not directly differentiated |
-| Local Query, SWA, output projections, and Norm | Receive gradients through local computation |
-| Shared global KV | Contributions from consuming layers accumulate and flow into the KV projections and inputs |
-
-For shared Decoder global KV, the gradient also reaches the **final Encoder output**. Inference caches save computation; training preserves the necessary gradient paths through shared KV.
-
-**Single-Pass mHC** mixes residual streams, **Engram** provides conditional memory indexed by token combinations, and **DSpark** accelerates generation with speculative decoding.
+Ordinary continuous Decode computes one new position through all 40 layers and updates SWA incrementally, without replaying 128 historical positions at every step. Bounded Replay can also prepare missing or recovered local caches.
