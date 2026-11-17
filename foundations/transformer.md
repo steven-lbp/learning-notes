@@ -23,27 +23,27 @@ Attention lets each token read information from visible positions according to r
 
 ### 1.1 文本如何变成向量？
 
-以“小王去银行取钱”为例，假设 Tokenizer 将它切成 `小王 / 去 / 银行 / 取 / 钱` 这 5 个 Token。实际切分由模型的 Tokenizer 决定。每个 Token 先变成一个整数 ID，再用这个 ID 查 Embedding 表，得到一个 `hidden_size` 维的向量。
+Tokenizer 产生 Token 编号，Embedding 将每个编号映射成 `hidden_size` 维向量。本例词表为 `A B C D E`，主干宽度为 4；输入 `A B C` 后，H⁽⁰⁾ 的 shape 是 `[3,4]`。**Token 数、特征宽度、词表大小分别是 3、4、5。**
 
-若 `hidden_size=512`，这句话的表示就是 `[5, 512]`：5 个位置，每个位置有 512 个数。**序列长度、词表大小、Embedding 维度是三个不同的量。** 向量中的分量由训练学习，不是预先指定的“地点”“动作”等字段。
-
-For illustration, suppose the tokenizer splits the sentence into five tokens: `小王 / 去 / 银行 / 取 / 钱`. Actual tokenization depends on the model. Each token becomes an integer ID, which indexes an Embedding table to retrieve a `hidden_size`-dimensional vector.
-
-With `hidden_size=512`, the sentence has shape `[5, 512]`: five positions with 512 values each. **Sequence length, vocabulary size, and Embedding dimension are distinct quantities.** Components are learned features rather than predefined fields such as location or action.
+The tokenizer produces IDs, and Embedding maps each ID to a `hidden_size`-dimensional vector. With vocabulary `A B C D E` and backbone width 4, input `A B C` gives H⁽⁰⁾ of shape `[3,4]`. **Token count, feature width, and vocabulary size are 3, 4, and 5.**
 
 ```text
-Text → Token IDs [5] → Embedding lookup → Hidden States [5, 512]
+A B C → Token IDs [0,1,2] → Embedding → H⁽⁰⁾ [3,4]
 ```
+
+H⁽ℓ⁾ 是第 ℓ 层的表示矩阵，hₜ⁽ℓ⁾ 是第 t 个位置的一行。**行对应 Token 位置，列对应特征。** 单个位置始终是完整的 4 维向量；少计算一行，不会让其他行缺少特征。
+
+H⁽ℓ⁾ is a layer's representation matrix; hₜ⁽ℓ⁾ is the row for position t. **Rows are token positions; columns are features.** Each position has a complete 4-dimensional vector; omitting a row does not remove features from another row.
 
 ### 1.2 Attention 在模型的什么位置？
 
-在常见的 Decoder Transformer 中，Embedding 后是多层 Transformer Block。每层的 Attention 在 Token 之间读取信息，FFN / MoE 对各位置的特征继续变换，并配合归一化和残差连接。最后，LM Head 将模型表示映射为词表上的预测分数。
+Embedding 依次经过 Transformer Blocks。每层从本层输入生成 Q/K/V，Attention 读取可见位置的信息，再经输出投影、残差和 FFN / MoE 更新 Hidden State。层内投影宽度可以变化，完整 Block 的输出回到主干宽度。下文用 X 表示本层 Attention 的输入。
 
-第一层继承输入 Embedding；后续层接收上一层输出的 Hidden States。因此，**每层都从自己的输入计算自己的 Q、K、V**。下面用 X 表示当前 Attention 的输入；具体实现中，X 可能是经过归一化的层输入。
+Embeddings pass through Transformer blocks. Each layer projects its input into Q/K/V, reads visible positions with Attention, and updates hidden states through output projection, residuals, and FFN / MoE. Internal widths may vary; complete blocks return to the backbone width. X below denotes the current Attention input.
 
-In a typical Decoder Transformer, embeddings pass through multiple Transformer blocks. Attention exchanges information between token positions, while the FFN or MoE transforms features at each position. Normalization and residual connections accompany these operations. The LM Head maps the final representations to vocabulary prediction scores.
+**预测下一个 Token，直接用的是最后一层、最后一个输入位置的完整向量。** 它经 LM Head 映射为词表分数，再通过取最大值或采样选出下一 Token。本例送入输出头的是 `[1,4]`，得到的是 `[1,5]`。
 
-The first layer receives the input embeddings, and later layers receive the preceding layer's Hidden States. **Each layer computes its own Q, K, and V from its own input.** Below, X denotes the current Attention input, which may already be normalized.
+**Next-token prediction directly uses the final layer's vector at the last input position.** The LM Head maps it to vocabulary scores, followed by argmax or sampling. Here, `[1,4]` becomes `[1,5]`.
 
 ## 2. 单头 Attention：从 QKV 到输出
 
@@ -131,6 +131,10 @@ A=\mathrm{softmax}\left(\frac{QK^T}{\sqrt{d_k}}+M\right),\qquad
 O=AV
 ```
 
+**输出行数由 Query 行数决定，Key 数量决定每行有多少个读取权重。** 一个新位置的 Q 读取 4 条 KV，仍只产生该位置的一个 Attention 输出，不会重新生成那 4 个位置的 Hidden States。
+
+**Output rows follow query rows; the number of keys determines weights per row.** One new-position query reading four KV entries still produces one position's Attention output, rather than new hidden states for all four KV positions.
+
 [Attention Is All You Need, §3.2](https://arxiv.org/html/1706.03762v7#S3.SS2)
 
 ## 3. 多头 Attention：分头、位置与维度
@@ -147,9 +151,9 @@ This example chooses `hidden_size=512`, `num_heads=8`, and `head_dim=64`. Each Q
 
 ### 3.2 用同一组数字走完前向过程
 
-继续使用 5 个 Token，先省略 batch。每个 head 独立执行第 2 节的 Attention，最后合并 head 轴与特征轴。
+本节多头示例使用 5 个 Token；每个 head 独立执行第 2 节的 Attention，最后合并 head 轴与特征轴。
 
-Continue with five tokens and omit the batch dimension for now. Each head independently performs the Attention computation from Section 2. Concatenation then merges the head and feature axes.
+This multi-head example uses five tokens. Each head independently performs the Attention computation from Section 2. Concatenation then merges the head and feature axes.
 
 | 阶段 / Stage | Shape |
 | --- | --- |
@@ -219,64 +223,62 @@ The diagram follows the same dimensions through the full forward pass, then zoom
 
 ## 4. 推理：Prefill、Decode 与 KV Cache
 
-### 4.1 模型如何逐个生成 Token？
+### 4.1 Prefill：先把输入算一遍
 
-输入 `A B C D` 后，模型先对整个 Prompt 做一次 Prefill，最后一个位置的输出用于预测 `E`。随后把 `E` 作为新输入，通过全部层，预测 `F`；再输入 `F`，预测 `G`。
+**Prefill 就是先把你给的输入算一遍，留下后面要用的 KV 缓存。** 模型从第一层开始，逐层计算这些输入 Token 的 Hidden State，并保存各层的 KV。最后，用输入末尾那个 Token 在最后一层的向量，预测第一个输出 Token。
 
-**一个 Decode Step 是新 Token 经过整个模型的一次前向传播。** Layer 表示网络深度，Step 表示生成时间步。
+**Prefill processes the input you provide and saves KV for what comes next.** The model computes the input tokens' hidden states through its layers and stores each layer's KV. The last input token's final-layer vector then predicts the first output token.
 
-Given prompt `A B C D`, Prefill processes the prompt, and its final position predicts `E`. Feeding `E` through all layers predicts `F`; feeding `F` predicts `G`.
+输入的 Token 都已经知道，所以同一层可以一起算多个位置；层与层之间仍然一层接着一层。后一层的 KV 要用前一层算出的结果，因此需要先把输入逐层处理好。
 
-**One Decode Step is a forward pass of the new token through the entire model.** Layer refers to network depth; Step refers to generation time.
+All input tokens are known, so multiple positions can be computed together within a layer. Layers still run in order: later-layer KV requires results from earlier layers.
 
-| 阶段 / Phase | 当前输入 / Input | 每层缓存更新 / Per-layer cache update | 预测 / Prediction |
+### 4.2 Decode：每次往后生成一个 Token
+
+模型选出一个新 Token 后，把它送回模型，才能接着预测再下一个 Token。这个过程不断重复，就是逐 Token Decode。
+
+After selecting a new token, the model feeds it back to predict the following token. Repeating this process gives token-by-token Decode.
+
+**没有 KV Cache 时，每轮通常要把历史 Token 和新 Token 一起逐层重新算一遍，才能得到各层需要的 KV。有了 KV Cache，历史 KV 可以直接读取，所以每层才只需要新算当前 Token 的 Hidden State。** 同时写入当前 Token 的新 KV，把更新后的 Hidden State 交给下一层，直到算完最后一层。
+
+**Without a KV cache, each step normally reruns the history and the new token through the layers to rebuild their KV. With a cache, historical KV can be read directly, so each layer only needs to compute the current token's new hidden state.** It writes the current token's KV and passes the updated hidden state onward through the remaining layers.
+
+| 阶段 / Phase | 这一轮算谁 / What runs now | 每层新算的 H / New H per layer | KV 怎么处理 / KV handling |
 | --- | --- | --- | --- |
-| Prefill | `A B C D` | 保存 / Store KV for `A B C D` | `E` |
-| Decode 1 | `E` | 读取历史 KV，追加 E / Read history and append E | `F` |
-| Decode 2 | `F` | 读取历史 KV，追加 F / Read history and append F | `G` |
+| Prefill | 新输入的一段 Token / A new input sequence | 多行 `[T,d]` / Multiple rows | 把这些输入的 KV 准备好 / Prepare input KV |
+| Decode（有 KV Cache）/ Cached Decode | 刚选出的一个 Token / One newly selected token | 一行 `[1,d]` / One row | 读旧 KV，写入新 KV / Read old KV, write new KV |
 
-### 4.2 为什么能缓存 KV，为什么通常不缓存 Q？
+当前 Token 可以读很多条历史 KV，但这轮新算的 Hidden State 仍只有它自己的一行。**读旧 KV 是取以前算好的结果，不是让那些旧 Token 再跑一遍模型。** 一轮 Decode 对应当前 Token 走完全部层；层数和生成轮次是两回事。
 
-标准 causal Transformer 中，历史位置不能读取后面新增的 Token。在模型权重和计算条件一致时，历史位置的表示及其 K/V 保持不变，因此可以复用。
+The current token may read many historical KV entries while producing only its own new hidden-state row. **Reading old KV retrieves earlier results rather than rerunning old tokens.** One Decode step takes the current token through all layers; layer depth and generation steps are separate counts.
 
-每层只为新 Token 计算 Q/K/V：新 Q 读取该层的历史 K/V 和当前 Token 的 K/V，新的 K/V 追加进缓存。历史 Q 已完成对应位置的输出计算，后续生成不再需要它。**缓存按层保存**，因为各层的输入与投影参数不同。
+### 4.3 缓存里保存什么
 
-In a standard causal Transformer, past positions cannot read newly appended tokens. With unchanged model weights and computation settings, their representations and K/V remain valid for reuse.
+旧位置看不到后来新增的 Token，因此后来加 Token 不会改变那些已经算好的 KV，后续可以直接复用。**留下来的主要是各层的 KV，通常不需要把所有旧 Token 的完整 Hidden States 也一直存着。** KV 是 Hidden State 投影后的另一份结果，保存 KV 不等于另存一份完整 H。
 
-Each layer computes Q/K/V only for the new token. Its new Q reads that layer's past and current K/V, and its new K/V are appended to the cache. Past queries have already produced their position outputs and are not needed for later generation. **Caches are stored per layer**, since layers have different inputs and projection parameters.
+Past positions cannot see later tokens, so adding a token does not change previously computed KV. **The model keeps historical KV and usually does not also retain every past token's full hidden states.** KV is projected from hidden states; caching it does not mean keeping a second full H history.
 
-若当前共有 t 个可见位置，单 head 的一次 Decode 读取就是：
+| 数据 / Data | 怎么用 / Use |
+| --- | --- |
+| 模型权重 / Model weights | 每轮重复使用同一套参数 / Reuse the same parameters each step |
+| 当前 Hidden State、Q、Attention 权重 / Current H, Q, Attention weights | 这轮计算时使用，用完通常释放或复用内存 / Use during this computation, then usually release or reuse memory |
+| KV Cache | 留给后面的 Token 读取 / Keep for later tokens to read |
 
-With t visible positions, one head's Decode attention has these shapes:
+**当前 Hidden State 仍然必须算：它要生成 Q/K/V、传到后面的层，最后还要用来预测下一个 Token。** 省掉的是旧位置的重复计算。
 
-```math
-[1,d_k]\times[d_k,t]\rightarrow[1,t],\qquad
-[1,t]\times[t,d_v]\rightarrow[1,d_v]
-```
+**The current hidden state is still needed to produce Q/K/V, pass information to later layers, and predict the next token.** Caching saves repeated computation for old positions.
 
-KV Cache 避免重新运行历史 Token；Full Attention 中，新 Q 仍然需要读取所有可见 KV，因此上下文越长，读取缓存的开销仍然越大。
+![Prefill 与 Decode 的计算流程](images/prefill-decode-hidden-state-cache.svg)
 
-KV caching avoids rerunning past tokens. With full Attention, each new query still reads all visible KV, so cache-reading cost continues to grow with context length. [Hugging Face: How caching works](https://huggingface.co/docs/transformers/main/cache_explanation)
+### 4.4 Prefix Caching：相同的前缀接着用
 
-### 4.3 Prefix Caching：跨请求复用相同前缀
+如果不同请求前面有一段完全相同的输入，第一次算好的逐层 KV 可以留给下一次用。下一次只处理新加的输入，再继续生成。复用要求前缀 Token、模型权重、位置编码和 Mask 等条件匹配。
 
-若多个请求的公共指令和 Doc 完全相同，第一次请求可以保存前缀的逐层 KV。后续命中时，加载这些 KV，只处理新 Query；回答生成继续使用普通 Decode。
+If requests begin with identical input, per-layer KV from the first request can be reused. The next request processes only newly added input before continuing generation. Reuse requires matching prefix tokens, model weights, positions, masks, and other computation settings.
 
-命中的基础是前缀不依赖后面的 Query。复用需要前缀 Token、前序上下文、模型权重、位置编码和 Mask 等计算条件一致；语义相近或仅中间一段文字相同，都不足以直接复用。vLLM 按块管理前缀 KV，块的标识包含前序块信息、本块 Token 和相关配置。
+**省掉的是重新计算同一段前缀的工作，后面的 Token 仍然要读它的 KV。**
 
-If requests have an identical instruction-and-document prefix, the first request can save its per-layer KV. Later cache hits load those KV and process only the new query, followed by ordinary Decode when generating an answer.
-
-Reuse works because the prefix does not depend on the following query. A hit requires matching prefix tokens, preceding context, model weights, positions, masks, and other computation settings. Semantic similarity or an identical middle passage is insufficient. vLLM identifies prefix-cache blocks using preceding block information, current tokens, and relevant configuration.
-
-```text
-Request 1: [Shared instructions + Doc] + Query A
-Request 2: [Shared instructions + Doc] + Query B
-Request 3: [Shared instructions + Doc] + Query C
-```
-
-**Prefix Caching 主要节省 Prefill。** 4096 Token 的 Doc 仍占 4096 个 KV 位置，后续 Query 和生成 Token 仍要对它们做 Attention。
-
-**Prefix Caching mainly saves Prefill.** A 4096-token document still occupies 4096 KV positions, which later query and generated tokens continue to attend to. [vLLM: Automatic Prefix Caching](https://docs.vllm.ai/en/stable/features/automatic_prefix_caching/) · [Prefix Caching implementation](https://docs.vllm.ai/en/stable/design/prefix_caching/)
+**This saves recomputing the shared prefix; later tokens still read its KV.**
 
 ## 5. 真实模型：MHA、GQA 与 MLA
 
