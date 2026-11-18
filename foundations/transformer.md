@@ -363,6 +363,12 @@ MLA（Multi-head Latent Attention）为每个 Token 保存一份共享的 KV 潜
 
 MLA stores a shared KV latent for each token, from which head-specific projections produce distinct K/V representations. DeepSeek-V3 stores the positional key separately, allowing Attention to operate directly on the compact cache.
 
+**DeepSeek-V3 的 61 个 Transformer Block 各自执行 MLA，层间传递的 Hidden State 始终为 7168 维。** 每层用自己的投影参数生成 KV latent，紧凑缓存按 Token 保存 512 维 latent 和 64 维 RoPE Key。
+
+**Each of DeepSeek-V3's 61 Transformer blocks runs its own MLA and passes a 7168-dimensional hidden state to the next stage.** Each layer has its own projection weights and stores a 512-dimensional KV latent and a 64-dimensional RoPE key per token in its compact cache.
+
+![DeepSeek-V3 逐层执行 MLA。层间传递 7168 维 Hidden State，每层读写自己的 KV Cache。](images/deepseek-v3-mla-layers.svg)
+
 ### 6.1 为什么需要压缩 KV Cache
 
 #### 6.1.1 三种内存分别保存什么
