@@ -1,13 +1,13 @@
 # DeepSeek V4.1 Flash
 
-**理解主线：少数 Full 层建立全局 KV，多层共享它；Indexer 决定读哪些条目，各层自己的 Q 和局部 SWA 决定怎样继续更新 Hidden State。**
+V4.1 的主线是**跨层共享全局 KV**。少数 Full 层建立全局缓存，各层用自己的 Q 和局部 SWA 更新 Hidden State。这个结构既减少缓存副本，也让长输入的 Prefill 可以省去后半段的大量计算。
 
-**Core idea: a few Full layers create global KV for many layers to share. Indexers select entries; each layer's own Q and local SWA drive the next hidden-state update.**
+V4.1 shares global KV across layers. A few Full layers build the global caches, while each layer uses its own Q and local SWA to update the hidden state. This reduces cache copies and lets long-input Prefill skip much of the computation in the second half.
 
 - [1 整体骨架](#1-整体骨架)
 - [2 核心注意力：一份全局池如何供多层使用](#2-核心注意力一份全局池如何供多层使用)
 - [3 缓存为什么变小](#3-缓存为什么变小)
-- [4 本模型如何额外优化 Prefill](#4-本模型如何额外优化-prefill)
+- [4 KV 共享为什么能加快 Prefill](#4-kv-共享为什么能加快-prefill)
 
 ## 1 整体骨架
 
@@ -92,41 +92,31 @@ For T=10000, global caching occupies `25000 × 356 = 8,900,000 B`. This counts o
 
 **Weights versus caches:** projection matrices, Norm gains, and Indexer parameters are learned model weights. Main KV, indexer K, and SWA KV are input-dependent cached data. Queries and Attention weights serve current computation and are normally absent from historical KV caches.
 
-## 4 本模型如何额外优化 Prefill
+## 4 KV 共享为什么能加快 Prefill
 
-### 4.1 在第 20 层输出后准备完整的 Decoder 全局 KV
+![V4.1 Prefill 的两条路径：全部 10000 个位置生成全局 KV，末尾 128 个位置继续跑后 20 层](images/deepseek-v4.1-flash-prefill.svg)
 
-V4.1 的额外收益来自缓存依赖：**第 21–40 层共用的全局 KV，直接从所有位置的最终 Encoder 输出生成。** 历史位置无需继续经过后 20 层的完整 Attention 和 MoE，才能提供这些全局 KV。
+### 4.1 全局 KV 在第 20 层输出后就能准备好
 
-例如处理 10000 个输入位置：先让全部位置经过前 20 层，再投影生成完整 Decoder 全局 KV。随后，后 20 层只处理末尾短后缀，准备局部 SWA 并得到最后位置的最终输出。
+沿用 10000 个输入 Token 的例子，假设没有可复用的缓存。**全部 10000 个位置都算到第 20 层。** 第 21 层的 Full 用这些位置的 H₂₀ 投影出 10000 条全局 KV，供第 21–40 层共用。
 
-| Block 计算范围 / Block execution | 前 20 层 / First 20 layers | 后 20 层 / Last 20 layers |
+这与第 2 节图中的共享关系是同一件事。**后半段所需的历史全局 KV 只依赖 H₂₀**，所以准备这份缓存时，可以跳过旧位置在后半段的 Attention 和 MoE。最后一个输入位置仍需算到第 40 层，用它的最终 Hidden State 预测第一个输出 Token。
+
+For a 10,000-token prompt with no reusable cache, **all 10,000 positions run through layer 20**. The Full layer at 21 projects their H₂₀ states into 10,000 global KV entries shared by layers 21–40.
+
+This is the sharing shown in Section 2. **The second half's global KV depends only on H₂₀**, so building it can skip Attention and MoE in the second half for older positions. The final input position still runs through layer 40, and its hidden state predicts the first output token.
+
+### 4.2 用末尾 128 个位置准备各层的 SWA
+
+全局 KV 准备好后，后半段还要建立各层自己的 SWA。**单层窗口是 128，但精确计算所需的历史会跨层向前延伸。** 例如第 22 层在位置 `9873` 做 SWA 时，正常窗口会使用位置 `9872` 的 KV，而这条 KV 来自第 21 层在 `9872` 的输出。这样就依赖了末尾 128 个位置之外的层计算。
+
+部署时，**SWA Bounded Replay** 让位置 `9873–10000` 继续跑后 20 层，并将每层的局部窗口截在这段后缀内。较早的位置仍可通过全局 KV 被选中。这样能用短后缀准备各层的局部缓存，得到的是近似状态。进入 Decode 后，每步只处理一个新位置，复用已有窗口并写入当前 KV。
+
+The Decoder still needs a separate SWA cache at each layer. **The window spans 128 positions per layer, and the dependencies of exact computation reach further back across layers.** At position `9873`, layer 22 would normally read the local KV at `9872`, which depends on the layer 21 output at that earlier position.
+
+With **SWA Bounded Replay**, positions `9873–10000` traverse the last 20 layers and each SWA window is clipped to that suffix. Earlier positions remain accessible through global KV. This prepares approximate local caches from a short suffix. Each Decode step then processes one new position and updates its windows incrementally.
+
+| 阶段 / Phase | 前 20 层的计算位置 / Positions through layers 1–20 | 后 20 层的完整计算位置 / Positions through all of layers 21–40 |
 | --- | --- | --- |
-| 完整前向 / Full forward | 10000 个位置 / positions | 10000 个位置 / positions |
-| 优化 Prefill / Optimized Prefill | 10000 个位置 / positions | 最近 128 个位置 / latest positions |
-
-**最后一个输入位置仍完整经过 40 层，用于预测第一个新 Token。** 省去的是大量旧位置在后半段的完整计算，并未缩短最后位置的计算深度。全局 KV 的投影与建缓存仍需执行。
-
-V4.1 exploits a specific cache dependency: **global KV shared by layers 21–40 is projected directly from final Encoder states at all positions.** Historical positions need not execute full Decoder Attention and MoE to supply this global cache.
-
-For 10000 input positions, all positions first traverse the Encoder, then generate the complete Decoder-global cache. The Decoder processes only a short suffix to prepare local SWA and obtain the final input position's output.
-
-**The final input position still traverses all 40 layers to predict the first new token.** Savings come from skipping full Decoder computation for many older positions, while global-KV projection and cache construction still execute.
-
-### 4.2 用 128 个位置的近似回放准备 SWA
-
-后半段每层仍有自己的局部 SWA，因此不能只准备全局 KV 就结束。**Decoder SWA Bounded Replay** 把回放长度设为窗口长度 128，让最后 128 个位置依次经过后 20 层，生成各层局部缓存。
-
-这里的 **128 是继续计算 Hidden States 的位置数**。每个回放位置在各层仍按 Full / Reindex / Reuse 规则读取 **Top-512 全局 KV + 最多 128 条本层 SWA KV**。较早位置不继续跑后半段，但它们由 Encoder 输出生成的全局 KV 仍可被选中；历史并未只剩最后 128 个 Token。
-
-多层 SWA 的依赖会向前扩展；若追求与完整前向相同的局部状态，需要处理更长的后缀。只回放 128 个位置会截断片段边界之前的局部依赖，**因此它是近似策略，不保证与完整前向数学等价**。
-
-正常连续 Decode 仍只新算当前一个位置，并经过完整 40 层；每层 SWA 增量更新，不会每步再重算 128 个历史位置。局部缓存丢失或需要恢复时，也可通过 Bounded Replay 准备窗口。
-
-Each Decoder layer still needs its own local SWA. **Decoder SWA Bounded Replay** sets the replay length to the 128-position window size and runs this suffix through the Decoder to prepare its local caches.
-
-Here, **128 counts positions whose hidden states are computed**. Each replayed position still reads **Top-512 global entries and up to 128 local SWA entries**, following Full / Reindex / Reuse rules. Older positions remain accessible through global KV generated from Encoder states.
-
-Local dependencies extend backward across SWA layers. Exact reconstruction would require a longer suffix; replaying only 128 positions truncates local dependencies before the replay boundary. **This is an approximation, not a mathematically identical full forward pass.**
-
-Ordinary continuous Decode computes one new position through all 40 layers and updates SWA incrementally, without replaying 128 historical positions at every step. Bounded Replay can also prepare missing or recovered local caches.
+| Prefill，预测第一个输出 Token / Predict the first output token | `1–10000` | `9873–10000` |
+| 首次单步 Decode，预测第二个输出 Token / Predict the second output token | `10001` | `10001` |
